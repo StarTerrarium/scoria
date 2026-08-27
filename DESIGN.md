@@ -457,7 +457,7 @@ Themes are defined as serialisable data even while compiled in, so user themes l
 | Output | rodio 0.22 → cpal | cpal tries PipeWire → PulseAudio → ALSA |
 | Tags | lofty 0.25 | Read and write. Also reads ReplayGain and embedded artwork |
 | Database | rusqlite 0.40, `bundled` | Compiles SQLite into the binary |
-| Search | SQLite FTS5 | |
+| Search | SQLite FTS5, `trigram` tokenizer | `unicode61` only matches whole tokens, so `lect` would not find `Electric Callboy`. Trigram matches substrings in any script. Its floor of three characters is covered by a `LIKE` fallback, which matters because two-character queries are ordinary in Japanese |
 | Watching | notify | |
 | MPRIS | souvlaki 0.8 | Media keys, playerctl, desktop controls |
 | Licence | GPL-3.0 | |
@@ -500,9 +500,11 @@ Recorded because they were decided without explicit sign-off. Flag if any are wr
 - Symphonia stays on whatever version rodio resolves, rather than tracking its own latest.
 
 - Missing sort values land last in both directions (§4.4).
+- Settings live in one TOML file at `$XDG_CONFIG_HOME/scoria/config.toml`, with the database under `$XDG_DATA_HOME/scoria/` and thumbnails under `$XDG_CACHE_HOME/scoria/`. Each crate owns its own section of the file, so core never has to name a UI concept in order to store one. A config file that exists but does not parse is an error rather than a silent reset.
+- Album identity keys are length-prefixed rather than delimited, so no tag value can forge another album's identity (§4.2).
+- The schema is `STRICT`, has no library id anywhere (§5.1), and denormalises album artist and title onto `tracks` because sorting, grouping and the filter cascade all read them per row.
 - Shuffle uses a small owned PRNG rather than the `rand` crate, so that shuffle is deterministic under test.
 
 ### Open, to be decided at the milestone that forces them
 
-- Config file format and XDG locations for root, theme, columns, placement and play behaviour.
 - `LibraryDelta` granularity: per-track deltas, or coarse invalidation the UI re-queries after. The shape ships coarse with specific variants available, so tightening it later is additive.

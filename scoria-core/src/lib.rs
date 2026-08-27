@@ -6,10 +6,13 @@
 //! `scripts/check-boundaries.sh` for what enforces it.
 
 pub mod command;
+pub mod config;
 pub mod date;
+pub mod db;
 pub mod error;
 pub mod event;
 pub mod id;
+pub mod library;
 pub mod model;
 pub mod path;
 pub mod playback;
@@ -19,10 +22,13 @@ pub mod query;
 mod test_support;
 
 pub use command::{Command, SourceSpec};
+pub use config::{LibraryConfig, Paths, PlayBehaviour};
 pub use date::Date;
+pub use db::{AlbumRepository, NewAlbum, NewTrack, SqliteDatabase, TrackRepository};
 pub use error::CoreError;
 pub use event::{Event, LibraryDelta, PlaybackState};
 pub use id::{AlbumId, QueryId, TrackId};
+pub use library::AlbumIdentity;
 pub use model::{Album, GainMode, ReplayGain, Timestamp, Track};
 pub use path::RelativePath;
 pub use playback::{Origin, PlaybackSource, RepeatMode};

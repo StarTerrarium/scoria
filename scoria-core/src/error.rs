@@ -28,4 +28,21 @@ pub enum CoreError {
     /// The snapshot is empty, so there is nothing to play.
     #[error("playback source is empty")]
     EmptySource,
+
+    /// Storage failed. Carries a message rather than the driver's error type,
+    /// because this crosses the seam and must stay serialisable.
+    #[error("database error: {0}")]
+    Database(String),
+
+    /// The database holds something the model cannot represent.
+    #[error("corrupt library data: {0}")]
+    CorruptData(String),
+
+    #[error("configuration error: {0}")]
+    Config(String),
+
+    /// No library root has been chosen yet, so there is nothing to scan or
+    /// resolve paths against. The first-run picker exists to fix this (§5.1).
+    #[error("no library root configured")]
+    NoLibraryRoot,
 }

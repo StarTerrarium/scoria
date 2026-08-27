@@ -10,9 +10,13 @@ authors.workspace = true
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+rusqlite.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+# Integration tests reach past the repository to simulate a corrupted database.
+rusqlite.workspace = true
 
 [lints]
 workspace = true

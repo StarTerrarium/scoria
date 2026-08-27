@@ -31,6 +31,9 @@ symphonia = "0.5"
 lofty = "0.25"
 rusqlite = { version = "0.40", features = ["bundled"] }
 notify = "8"
+# Config file format. Human-editable is a requirement: DESIGN.md 7.3 sends users
+# with exotic sort needs to the config file rather than building them a UI.
+toml = "1"
 
 # Desktop integration.
 souvlaki = "0.8"
