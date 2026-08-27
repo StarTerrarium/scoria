@@ -1,0 +1,20 @@
+[package]
+name = "scoria-cli"
+description = "Scoria binary: selects a frontend, and drives the core directly for debugging."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "scoria"
+path = "src/main.rs"
+
+[dependencies]
+scoria-core.workspace = true
+scoria-gui.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true

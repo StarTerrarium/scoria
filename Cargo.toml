@@ -1,0 +1,49 @@
+[workspace]
+resolver = "3"
+members = ["scoria-core", "scoria-cli", "scoria-gui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Floor is set by lofty (1.89); iced needs 1.88, rodio 1.87.
+rust-version = "1.89"
+license = "GPL-3.0-only"
+authors = ["Joel Smith"]
+
+# Every third-party version lives here and nowhere else. CLAUDE.md: do not bump a
+# major or minor as part of an unrelated task.
+[workspace.dependencies]
+scoria-core = { path = "scoria-core" }
+scoria-gui = { path = "scoria-gui" }
+
+# UI. Only ever depended on by scoria-gui -- see scripts/check-boundaries.sh.
+iced = "0.14"
+
+# Audio. rodio drives Symphonia itself through its own feature flags, so a direct
+# symphonia dependency is not needed until gapless trimming (DESIGN.md 3.4) wants
+# exact sample counts. When it is added it MUST stay on the version rodio resolves
+# to -- rodio 0.22 pulls symphonia 0.5, and mismatching it links two copies of the
+# decoder into the binary.
+rodio = "0.22"
+symphonia = "0.5"
+
+# Library and storage.
+lofty = "0.25"
+rusqlite = { version = "0.40", features = ["bundled"] }
+notify = "8"
+
+# Desktop integration.
+souvlaki = "0.8"
+
+# Plumbing.
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] }
+
+[workspace.lints.clippy]
+# CLAUDE.md: never unwrap() outside tests, never panic! in the audio thread.
+# Enforced by the build rather than by review. Test modules opt out locally with
+# #![allow(clippy::unwrap_used)].
+unwrap_used = "deny"
+expect_used = "deny"
