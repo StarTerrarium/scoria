@@ -1,0 +1,183 @@
+//! Reading tags off disk.
+//!
+//! Uses `lofty` rather than Symphonia's metadata layer, because tag *writing*
+//! is wanted later (`DESIGN.md` §9.3) and lofty covers both.
+//!
+//! Everything here is tolerant by design. A library is a pile of files written
+//! by many different tools over many years, and a scanner that refuses a file
+//! because one frame is malformed indexes less than a scanner that takes what
+//! it can read. Nothing is invented, though: a field that cannot be read is
+//! `None`, never a guess.
+
+use crate::date::Date;
+use crate::error::CoreError;
+use crate::model::ReplayGain;
+use lofty::file::{AudioFile, TaggedFileExt};
+use lofty::prelude::ItemKey;
+use lofty::tag::Tag;
+use std::path::Path;
+use std::time::Duration;
+
+/// File extensions the scanner considers audio.
+///
+/// FLAC is the first-class target for 1.0 (§5.2); the rest are indexed so that
+/// broad format support before release is a playback problem rather than a
+/// rescan.
+pub const AUDIO_EXTENSIONS: &[&str] = &[
+    "flac", "mp3", "ogg", "oga", "opus", "m4a", "m4b", "mp4", "aac", "wav", "wave", "aiff", "aif",
+    "wv", "ape", "mpc", "wma",
+];
+
+/// Whether a path looks like something worth reading tags from.
+#[must_use]
+pub fn is_audio_file(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        AUDIO_EXTENSIONS
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(e))
+    })
+}
+
+/// What one file's tags say.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrackTags {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album_artist: Option<String>,
+    pub album_artist_sort: Option<String>,
+    pub album: Option<String>,
+    pub date: Option<Date>,
+    pub disc: Option<u16>,
+    pub track_number: Option<u16>,
+    pub duration: Duration,
+    /// `MUSICBRAINZ_ALBUMID`, the top rung of the identity ladder (§4.2).
+    pub musicbrainz_album_id: Option<String>,
+    pub replay_gain: ReplayGain,
+    pub has_embedded_artwork: bool,
+}
+
+/// Reads tags from a file.
+///
+/// # Errors
+///
+/// [`CoreError::CorruptData`] if the file cannot be parsed as audio at all.
+/// Individual unreadable fields are absent rather than fatal.
+pub fn read(path: &Path) -> Result<TrackTags, CoreError> {
+    let file = lofty::read_from_path(path)
+        .map_err(|e| CoreError::CorruptData(format!("{}: {e}", path.display())))?;
+
+    let duration = file.properties().duration();
+    // The primary tag is the format's native one; a file with only a foreign
+    // tag block still has readable metadata, so fall back rather than give up.
+    let tag = file.primary_tag().or_else(|| file.first_tag());
+
+    let Some(tag) = tag else {
+        // No tags at all is normal for a stray rip, not an error.
+        return Ok(TrackTags {
+            duration,
+            ..TrackTags::default()
+        });
+    };
+
+    Ok(TrackTags {
+        title: text(tag, ItemKey::TrackTitle),
+        artist: text(tag, ItemKey::TrackArtist),
+        album_artist: text(tag, ItemKey::AlbumArtist),
+        album_artist_sort: text(tag, ItemKey::AlbumArtistSortOrder),
+        album: text(tag, ItemKey::AlbumTitle),
+        date: read_date(tag),
+        disc: number(tag, ItemKey::DiscNumber),
+        track_number: number(tag, ItemKey::TrackNumber),
+        duration,
+        musicbrainz_album_id: text(tag, ItemKey::MusicBrainzReleaseId),
+        replay_gain: read_replay_gain(tag),
+        has_embedded_artwork: !tag.pictures().is_empty(),
+    })
+}
+
+/// A trimmed, non-empty string, or nothing.
+///
+/// Picard writes empty frames for fields it has no value for, so "present but
+/// blank" has to mean the same as absent -- otherwise every untagged field
+/// becomes an empty-string album artist that sorts as its own group.
+fn text(tag: &Tag, key: ItemKey) -> Option<String> {
+    tag.get_string(key)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Parses `4`, `04`, or `4/12`.
+///
+/// The `n/total` form is ordinary in ID3 and still appears in Vorbis comments
+/// written by older tools.
+fn number(tag: &Tag, key: ItemKey) -> Option<u16> {
+    let raw = text(tag, key)?;
+    let head = raw.split('/').next().unwrap_or(&raw).trim();
+    head.parse().ok()
+}
+
+fn read_date(tag: &Tag) -> Option<Date> {
+    // Picard writes a full DATE; older files may only have a year. Original
+    // release date is deliberately not consulted: §14 says albums sort
+    // chronologically by their own date, and for a reissue those differ.
+    text(tag, ItemKey::RecordingDate)
+        .and_then(|d| Date::parse(&d))
+        .or_else(|| text(tag, ItemKey::Year).and_then(|y| Date::parse(&y)))
+}
+
+fn read_replay_gain(tag: &Tag) -> ReplayGain {
+    ReplayGain {
+        track_gain_db: gain(tag, ItemKey::ReplayGainTrackGain),
+        track_peak: peak(tag, ItemKey::ReplayGainTrackPeak),
+        album_gain_db: gain(tag, ItemKey::ReplayGainAlbumGain),
+        album_peak: peak(tag, ItemKey::ReplayGainAlbumPeak),
+    }
+}
+
+/// Parses `-9.95 dB`, `-9.95dB` or `-9.95`.
+///
+/// The unit suffix is conventional rather than specified, so tools differ.
+/// Values that are not finite are dropped: §6.7 requires 0 dB over a guess, and
+/// a NaN gain would silence a track.
+fn gain(tag: &Tag, key: ItemKey) -> Option<f32> {
+    let raw = text(tag, key)?;
+    let numeric = raw.trim_end_matches(|c: char| c.is_ascii_alphabetic() || c.is_whitespace());
+    numeric.trim().parse::<f32>().ok().filter(|v| v.is_finite())
+}
+
+/// Peaks are a bare linear amplitude. Negative or non-finite values are
+/// meaningless and are dropped rather than clamped.
+fn peak(tag: &Tag, key: ItemKey) -> Option<f32> {
+    let raw = text(tag, key)?;
+    raw.trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn recognises_audio_by_extension_regardless_of_case() {
+        for name in ["a.flac", "a.FLAC", "a.Mp3", "a.opus", "a.m4a"] {
+            assert!(
+                is_audio_file(&PathBuf::from(name)),
+                "{name} should be audio"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_everything_else() {
+        for name in ["cover.jpg", "notes.txt", "album", "a.flac.bak", ".hidden"] {
+            assert!(
+                !is_audio_file(&PathBuf::from(name)),
+                "{name} should not be audio"
+            );
+        }
+    }
+}

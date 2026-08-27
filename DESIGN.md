@@ -221,7 +221,11 @@ Extracted at scan time, not on demand, because the transport bar wants a thumbna
 
 Precedence: the embedded picture first, then a sidecar in the album directory (`cover.*`, `folder.*`, `front.*`). Embedded wins because it travels with the file and is what Picard writes.
 
-Thumbnails are cached under `$XDG_CACHE_HOME/scoria/` keyed by `AlbumId`, at the two sizes the UI actually asks for -- the transport thumbnail and the larger one the `Top` browser strip is sized around (§7.1). The full-size overlay (§9.1) reads the source rather than the cache. The cache is derived data and safe to delete.
+Artwork is cached under `$XDG_CACHE_HOME/scoria/artwork/` keyed by `AlbumId`, stored **exactly as it was found**. Nothing is rescaled.
+
+Rescaling would need an image codec dependency and would buy nothing: artwork always follows what is playing (§9.1), so at most one image is on screen at a time. There is no album grid in this design, and a grid is what would make a thumbnail pipeline worth its weight. The renderer scales one image when it draws it. What the cache does buy is not having to open and parse an audio file to find the picture again, which is the expensive half.
+
+The cache is derived data and safe to delete.
 
 ---
 
@@ -302,7 +306,9 @@ Repeat is `Off | All | One`. `All` wraps at the end of the snapshot; `One` repea
 
 ### 6.7 ReplayGain
 
-Read from tags at scan time, never computed by analysing audio -- that is a different program's job (`rsgain`, `beets`). Track and album gain and peak are both stored; Opus and Vorbis carry the same information as `R128_*` in a different unit and are normalised on read.
+Read from tags at scan time, never computed by analysing audio -- that is a different program's job (`rsgain`, `beets`). Track and album gain and peak are all stored.
+
+`REPLAYGAIN_*` is what 1.0 reads, which covers FLAC, MP3 and any Vorbis-comment file written by the usual tools. Opus and Vorbis may instead carry `R128_*`, in a different unit. That is **not** read yet: `lofty`'s generic tag interface has no escape hatch for arbitrary keys, so reaching them means a per-format code path, and it is not worth one while FLAC is the first-class target (§5.2). It lands with broad format support, before release.
 
 **Which gain applies is derived, not configured:** album gain when playing in album order, track gain when shuffled. Album gain is the default because this is an album-centric player and preserving the loudness relationship *within* a record is the whole point of having album gain at all; shuffle destroys that relationship anyway, so track gain is correct there.
 
@@ -505,6 +511,11 @@ Recorded because they were decided without explicit sign-off. Flag if any are wr
 - The schema is `STRICT`, has no library id anywhere (§5.1), and denormalises album artist and title onto `tracks` because sorting, grouping and the filter cascade all read them per row.
 - Shuffle uses a small owned PRNG rather than the `rand` crate, so that shuffle is deterministic under test.
 
-### Open, to be decided at the milestone that forces them
+- `LibraryDelta` reports the specific tracks that changed. The scanner knows exactly which they are, so it says so and the UI can avoid a re-query it does not need; `Invalidated` stays available for callers that cannot be precise.
+- Artwork is cached at original size, not rescaled (§5.3).
+- A file with no title tag is labelled with its filename rather than left blank. This is the only place the scanner fills in a value rather than leaving it absent, and it is a label rather than a claim about the tags.
+- Symlinked directories are not followed during a scan, so a library containing a link back to its own root terminates.
 
-- `LibraryDelta` granularity: per-track deltas, or coarse invalidation the UI re-queries after. The shape ships coarse with specific variants available, so tightening it later is additive.
+### Open
+
+Nothing outstanding. Decisions taken during implementation are recorded above.

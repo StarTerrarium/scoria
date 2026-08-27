@@ -12,11 +12,17 @@ serde.workspace = true
 thiserror.workspace = true
 rusqlite.workspace = true
 toml.workspace = true
+lofty.workspace = true
+notify.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
 # Integration tests reach past the repository to simulate a corrupted database.
 rusqlite.workspace = true
+# Integration tests write real tags into real files, so the read path under
+# test is the one that runs in production.
+lofty.workspace = true
 
 [lints]
 workspace = true
