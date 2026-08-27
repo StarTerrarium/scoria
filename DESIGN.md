@@ -67,14 +67,23 @@ pub enum Command {
     PlayFrom { source: SourceSpec, at: TrackId },
     Pause,
     Resume,
+    Stop,
     Next,
     Previous,
     Seek(Duration),
     SetVolume(f32),
     SetPosition(usize),
+    SetShuffle(bool),
+    SetRepeat(RepeatMode),
     Query(QueryId, Selection),
     Rescan,
     SetRoot(PathBuf),
+}
+
+pub enum SourceSpec {
+    Library { sort: SortChain },                        // "play the whole library"
+    Shown { tracks: Vec<TrackId>, label: Option<String> },  // "play what's shown"
+    Album(AlbumId),
 }
 
 pub enum Event {
@@ -88,6 +97,15 @@ pub enum Event {
     Error(CoreError),
 }
 ```
+
+`SourceSpec` is how §6.3's play-behaviour setting reaches the core. `Shown`
+carries the track list explicitly rather than a `Selection`, because the view
+already has the answer -- handing it over means the core never re-runs a query
+to decide what plays, which states invariant 5 as a type rather than as a rule.
+
+`Stop` exists because MPRIS defines a Stop verb that desktop controls and
+`playerctl` will send whether or not we want one, and answering it by pausing
+would be a lie.
 
 Both enums derive `Serialize`/`Deserialize` from the start. We are not building a daemon in 1.0, but the seam is daemon-shaped, so putting a socket in the middle later is mechanical rather than a rewrite. It is also what makes the TUI cheap.
 
@@ -172,7 +190,11 @@ pub struct SortKey {
 
 `SortField` knows its own comparable value and comparator. Modelling this as "sort by the string in this column" breaks on the very first key.
 
-Two details: nulls need a defined position (albums without a date must land somewhere predictable), and every chain terminates in a deterministic tiebreaker on `TrackId` so that equal-key rows are stable across restarts and queue snapshots are reproducible.
+Two details: nulls need a defined position, and every chain terminates in a deterministic tiebreaker on `TrackId` so that equal-key rows are stable across restarts and queue snapshots are reproducible.
+
+**Missing values sort last in both directions.** Reversing them along with everything else would mean that flipping a column throws every untagged track to the top, which reads as corruption rather than as an ordering choice. An empty string counts as missing, since a blank tag and an absent one are the same thing to a reader.
+
+The tiebreaker is guaranteed by the `SortChain` constructor rather than by convention, so it cannot be forgotten.
 
 ---
 
@@ -272,7 +294,11 @@ Shuffle is a **permutation over `tracks`**, held alongside it. `tracks` itself s
 
 `Previous` walks a history of visited positions rather than stepping backwards through the permutation, because in shuffle those are different things and only one of them matches what the user just heard.
 
-Repeat is `Off | All | One`. `All` wraps at the end of the snapshot; `One` repeats the current position. Neither adds a track that was not in the snapshot.
+Turning shuffle on keeps the current track current -- it moves to the front of the new order rather than being displaced, because shuffling should change what comes *next*, not interrupt what is playing. Turning it off returns to natural order with the same track still playing.
+
+**Toggling shuffle off and on again reshuffles** rather than restoring the previous permutation. Restoring would mean the toggle sometimes reshuffles and sometimes does not, depending on history the user cannot see; always reshuffling is the behaviour that can be predicted from the button alone.
+
+Repeat is `Off | All | One`. `All` wraps at the end of the snapshot; `One` repeats the current position. Neither adds a track that was not in the snapshot. `One` is the engine replaying the same source rather than the snapshot advancing, so `Next` still skips under repeat-one -- the user pressing Next plainly means skip.
 
 ### 6.7 ReplayGain
 
@@ -473,10 +499,10 @@ Recorded because they were decided without explicit sign-off. Flag if any are wr
 - Embedded artwork takes precedence over a sidecar file (§5.3).
 - Symphonia stays on whatever version rodio resolves, rather than tracking its own latest.
 
+- Missing sort values land last in both directions (§4.4).
+- Shuffle uses a small owned PRNG rather than the `rand` crate, so that shuffle is deterministic under test.
+
 ### Open, to be decided at the milestone that forces them
 
-- `SourceSpec` is used by `Command::PlayFrom` (§3.2) but not yet defined.
-- There is no `Stop` command, only `Pause`/`Resume`. Whether one is needed depends on what MPRIS and the transport bar actually want.
 - Config file format and XDG locations for root, theme, columns, placement and play behaviour.
-- `LibraryDelta` granularity: per-track deltas, or coarse invalidation the UI re-queries after.
-- Whether toggling shuffle off and on again reshuffles or resumes the existing permutation.
+- `LibraryDelta` granularity: per-track deltas, or coarse invalidation the UI re-queries after. The shape ships coarse with specific variants available, so tightening it later is additive.

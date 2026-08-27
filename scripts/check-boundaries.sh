@@ -65,8 +65,24 @@ fi
 # to unwrap; production code is not. Test modules are conventionally last in the
 # file, so anything before `mod tests` is treated as production code.
 panic_lints='unwrap_used|expect_used|panic|todo|unimplemented|unreachable|indexing_slicing|string_slice|panic_in_result_fn'
+
+# Whole modules declared `#[cfg(test)] mod foo;` are test-only, so an allow
+# anywhere in foo.rs is legitimate. Collect their names first.
+test_only_modules=$(
+  find scoria-*/src -name '*.rs' 2>/dev/null \
+    | xargs grep -h -A1 '^#\[cfg(test)\]$' 2>/dev/null \
+    | grep -oE '^[[:space:]]*(pub )?mod [a-z_0-9]+;' \
+    | grep -oE '[a-z_0-9]+;' | tr -d ';' | sort -u
+)
+
 escapes=$(
   find scoria-*/src -name '*.rs' 2>/dev/null | sort | while read -r f; do
+    stem=$(basename "$f" .rs)
+    if [ -n "$test_only_modules" ] && echo "$test_only_modules" | grep -qx "$stem"; then
+      continue
+    fi
+    # Otherwise, test modules are conventionally last in the file, so anything
+    # before `mod tests` is production code.
     boundary=$(grep -n '^[[:space:]]*mod tests' "$f" | head -1 | cut -d: -f1)
     [ -z "$boundary" ] && boundary=999999
     grep -nE "allow\((clippy::)?($panic_lints)" "$f" \
