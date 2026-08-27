@@ -342,6 +342,10 @@ The claustrophobic feeling in `Top` comes from fewer visible artist rows, not fr
 
 Album artist → Album. Each pane has `All (n)` pinned at the top, and counts are contextual, recomputed against the current selection.
 
+**Contextual means upstream-only.** A pane counts against the filters applied *before* it, never its own. Selecting an artist leaves the artist pane listing every artist, and narrows only the album pane below it. A pane whose rows collapsed to the current selection would be a dead end -- there would be no way to change your mind without clearing the filter first. Search sits above both panes and narrows what each counts against.
+
+Every row's count sums to that pane's `All (n)`. That is the contract a pane makes by existing, and it is exactly the contract a genre pane cannot keep.
+
 **No genre pane.** Genre is many-valued per track; Picard writes multiple genre tags from MusicBrainz, so a track can legitimately be several genres at once. A filter pane implies its rows partition the library. Either the counts stop adding to `All`, or we invent a primary-genre rule that is not in the tags. That is a broken contract, not merely a noisy list, and it stays broken in a library tagged only with generic genres.
 
 ### 7.3 The track table
@@ -515,6 +519,8 @@ Recorded because they were decided without explicit sign-off. Flag if any are wr
 - Artwork is cached at original size, not rescaled (§5.3).
 - A file with no title tag is labelled with its filename rather than left blank. This is the only place the scanner fills in a value rather than leaving it absent, and it is a label rather than a claim about the tags.
 - Symlinked directories are not followed during a scan, so a library containing a link back to its own root terminates.
+- The library is held in memory and queried there; SQLite is the durable store and the full-text index. Going to storage per query costs about half a second at a hundred thousand tracks *whatever the query returns*, because it rebuilds every row. A search box queries per keystroke, so that is the normal path rather than a slow one. Roughly 40 MB at six figures, and `just bench-query` re-measures it.
+- Sorting is never delegated to SQL. SQLite's `NOCASE` is ASCII-only, so it would order `TERÄSBETONI` before `Teräsbetoni` where our comparator folds them -- and §6.3 requires a library snapshot to respect the table's sort *exactly*, so two orders would be a correctness bug rather than a cosmetic one.
 
 ### Open
 

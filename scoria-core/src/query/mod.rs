@@ -4,7 +4,12 @@
 //! layer's job (M4). It is defined here because `Command::Query` carries it
 //! across the seam, so its shape is part of the contract.
 
+pub mod engine;
+pub mod index;
 pub mod sort;
+
+pub use engine::{AlbumPane, AlbumRow, FilterPane, FilterRow, QueryEngine, QueryOutcome};
+pub use index::LibraryIndex;
 
 use crate::id::AlbumId;
 use serde::{Deserialize, Serialize};

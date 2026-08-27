@@ -32,5 +32,5 @@ pub use library::{AlbumIdentity, Artwork, ArtworkCache, ScanOutcome, ScanProgres
 pub use model::{Album, GainMode, ReplayGain, Timestamp, Track};
 pub use path::RelativePath;
 pub use playback::{Origin, PlaybackSource, RepeatMode};
-pub use query::Selection;
-pub use query::sort::{Direction, SortChain, SortField, SortKey, SortPreset};
+pub use query::sort::{Direction, Group, SortChain, SortField, SortKey, SortPreset};
+pub use query::{AlbumPane, FilterPane, LibraryIndex, QueryEngine, QueryOutcome, Selection};

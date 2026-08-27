@@ -9,6 +9,7 @@
 use crate::date::Date;
 use crate::model::Track;
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 
 /// What a field yields for comparison.
@@ -58,11 +59,27 @@ impl SortValue<'_> {
 /// sort of a six-figure library. It is not full Unicode collation, and does not
 /// need to be: §4.4's point is that Picard writes latin sort names, so
 /// `花冷え。` arrives here already as `HANABIE.`.
+#[must_use]
+pub fn compare_display_text(a: &str, b: &str) -> Ordering {
+    compare_text(a, b)
+}
+
 fn compare_text(a: &str, b: &str) -> Ordering {
-    let folded = a
-        .chars()
-        .flat_map(char::to_lowercase)
-        .cmp(b.chars().flat_map(char::to_lowercase));
+    // Unicode case folding is the correct path and the slow one: it dominates a
+    // sort of a six-figure library, because a comparison sort makes millions of
+    // these calls and most of them fold every character. When both sides are
+    // ASCII -- which most artist names are -- byte-wise ASCII folding gives an
+    // identical answer for a fraction of the work, since ASCII lowercasing and
+    // Unicode lowercasing agree over ASCII.
+    let folded = if a.is_ascii() && b.is_ascii() {
+        a.bytes()
+            .map(|c| c.to_ascii_lowercase())
+            .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+    } else {
+        a.chars()
+            .flat_map(char::to_lowercase)
+            .cmp(b.chars().flat_map(char::to_lowercase))
+    };
     folded.then_with(|| a.cmp(b))
 }
 
@@ -267,6 +284,57 @@ impl SortChain {
     /// is belt and braces rather than load-bearing.
     pub fn sort(&self, tracks: &mut [Track]) {
         tracks.sort_by(|a, b| self.compare(a, b));
+    }
+}
+
+impl SortChain {
+    /// Where group headers go, derived from the primary sort key (§7.3).
+    ///
+    /// Grouping is derived, not configured: a header is inserted wherever the
+    /// primary key's value changes. That is why sorting by duration switches
+    /// grouping off -- not as a special case, but because
+    /// [`SortField::groups`] says duration does not group.
+    ///
+    /// `tracks` must already be sorted by this chain; grouping an unsorted
+    /// slice would produce a header every time the value changed, which is
+    /// most rows.
+    #[must_use]
+    pub fn groups<T: Borrow<Track>>(&self, tracks: &[T]) -> Vec<Group> {
+        let Some(field) = self.group_field() else {
+            return Vec::new();
+        };
+
+        let mut groups: Vec<Group> = Vec::new();
+        for (index, track) in tracks.iter().enumerate() {
+            let label = field.group_label(track.borrow()).unwrap_or_default();
+            match groups.last_mut() {
+                Some(last) if last.label == label => last.len += 1,
+                _ => groups.push(Group {
+                    label,
+                    start: index,
+                    len: 1,
+                }),
+            }
+        }
+        groups
+    }
+}
+
+/// A run of adjacent rows sharing a primary sort value, with the header the
+/// table draws above them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Group {
+    pub label: String,
+    /// Index into the sorted rows where the group starts.
+    pub start: usize,
+    pub len: usize,
+}
+
+impl Group {
+    /// One past the last row of the group.
+    #[must_use]
+    pub const fn end(&self) -> usize {
+        self.start + self.len
     }
 }
 
@@ -703,5 +771,51 @@ mod tests {
         let chain = SortPreset::ArtistChronological.chain();
         let json = serde_json::to_string(&chain).unwrap();
         assert_eq!(serde_json::from_str::<SortChain>(&json).unwrap(), chain);
+    }
+}
+
+#[cfg(test)]
+mod fast_path_tests {
+    use super::*;
+
+    /// The Unicode path, kept here so the ASCII fast path can be checked
+    /// against it rather than against expectations.
+    fn reference(a: &str, b: &str) -> Ordering {
+        a.chars()
+            .flat_map(char::to_lowercase)
+            .cmp(b.chars().flat_map(char::to_lowercase))
+            .then_with(|| a.cmp(b))
+    }
+
+    #[test]
+    fn the_ascii_fast_path_agrees_with_unicode_folding() {
+        let names = [
+            "Metallica",
+            "metallica",
+            "METALLICA",
+            "MOS",
+            "Mos",
+            "",
+            "Teräsbetoni",
+            "TERÄSBETONI",
+            "花冷え。",
+            "HANABIE.",
+            "Omnific, The",
+            "The Omnific",
+            "dEUS",
+            "k.d. lang",
+            "AC/DC",
+            "Sigur Rós",
+            "Björk",
+        ];
+        for a in names {
+            for b in names {
+                assert_eq!(
+                    compare_text(a, b),
+                    reference(a, b),
+                    "fast path disagrees for {a:?} vs {b:?}"
+                );
+            }
+        }
     }
 }

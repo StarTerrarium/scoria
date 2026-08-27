@@ -77,6 +77,14 @@ install:
 
 # --------------------------------------------------------------- inspecting --
 
+# The architecture of the query engine rests on these numbers -- see the module
+# docs on LibraryIndex. Re-run after touching the engine, the comparator or the
+# index. Takes a track count; defaults to the six figures §14 designs for.
+
+# Benchmark the query engine at scale.
+bench-query count="100000":
+    cargo run --release -p scoria-core --example query_scale -- {{count}}
+
 # Advisory only: does not fail, and most hits are fine. See the
 # arithmetic_side_effects note in Cargo.toml for what is deliberately not denied.
 
