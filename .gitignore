@@ -1,0 +1,9 @@
+/target
+
+# Cargo.lock IS committed: these crates build binaries, not a published library.
+
+# Editor and OS noise
+*.swp
+.DS_Store
+.idea/
+.vscode/
