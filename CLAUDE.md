@@ -129,7 +129,8 @@ scoria-tui/ arrives post-1.0. It is deliberately not an empty crate until then.
 
 `./scripts/check-boundaries.sh` checks the invariants above that the compiler
 cannot express: core's dependency graph is free of UI crates, there is only one
-track table, iced `Color` never leaves `theme/`, and raw SQL never leaves `db/`.
+track table, iced `Color` never leaves `theme/`, raw SQL never leaves `db/`, and
+no panic lint has been `allow`ed outside a test module.
 CI runs it on every push. Run it before committing; if you add an invariant to
 this file, add a check for it there too.
 
@@ -145,7 +146,31 @@ this file, add a check for it there too.
 
 **Every sort chain ends in a `TrackId` tiebreaker** so equal-key rows are stable across runs.
 
-**Errors:** `thiserror` in `scoria-core`, `anyhow` at binary boundaries. Never `unwrap()` outside tests. Never `panic!` in the audio thread.
+**Errors:** `thiserror` in `scoria-core`, `anyhow` at binary boundaries.
+
+**There must be no known way for the application to panic at runtime.** This is
+stronger than "no `unwrap()`" and is the standing requirement, not an aspiration:
+
+- No `unwrap`, `expect`, `panic!`, `todo!`, `unimplemented!`, `unreachable!`, or
+  `process::exit` in production code. All are denied in `[workspace.lints]`.
+- No direct indexing or slicing. `v[i]` and `s[a..b]` panic; use `.get()` and
+  handle the `None`. String slicing is a live concern rather than a theoretical
+  one, because every string here comes from arbitrary tag metadata and a
+  non-char-boundary slice on a CJK title panics.
+- Division needs an explicit zero guard. No lint catches that.
+- Arithmetic on values derived from file metadata or user input uses
+  `checked_*` or `saturating_*`. Elsewhere, pick types that cannot overflow.
+- A `Mutex` whose holder panicked returns `Err` on `lock()`. Handle the
+  `PoisonError`; never `unwrap()` a lock.
+- `unsafe` is `forbid`den workspace-wide, not merely discouraged.
+
+When an error genuinely cannot be handled locally, return it. The seam is built
+for this: `Event::Error(CoreError)` exists so the core can report a failure to
+the UI instead of dying.
+
+A test module may opt out at the top of `mod tests`:
+`#![allow(clippy::unwrap_used, clippy::indexing_slicing)]`. Anywhere else, the
+boundary script will flag it.
 
 **Tests:** unit tests for query building, sort chains, and album identity resolution. Integration tests for scan-then-query. The audio backend is behind a trait, so playback logic is testable with a mock — do it.
 
@@ -174,5 +199,8 @@ When a task touches an invariant, say so before writing code rather than after.
 When a design decision is genuinely underdetermined, ask rather than guess. There is a documented `DESIGN.md` §14 assumptions list; add to it rather than making a silent choice.
 
 Prefer standard library and existing dependencies over new crates.
+
+`just` runs everything. `just check` is the full gate CI runs; `just` on its own
+lists the rest.
 
 When something in `DESIGN.md` turns out to be wrong or infeasible, update the document in the same change. A design doc that drifts from the code is worse than none.

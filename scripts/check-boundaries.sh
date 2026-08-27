@@ -60,4 +60,26 @@ else
   pass "no raw SQL outside db/"
 fi
 
+# Panic policy: the workspace denies the constructs that can panic at runtime, but
+# a local `allow` silently reopens the hole. Test modules are legitimately allowed
+# to unwrap; production code is not. Test modules are conventionally last in the
+# file, so anything before `mod tests` is treated as production code.
+panic_lints='unwrap_used|expect_used|panic|todo|unimplemented|unreachable|indexing_slicing|string_slice|panic_in_result_fn'
+escapes=$(
+  find scoria-*/src -name '*.rs' 2>/dev/null | sort | while read -r f; do
+    boundary=$(grep -n '^[[:space:]]*mod tests' "$f" | head -1 | cut -d: -f1)
+    [ -z "$boundary" ] && boundary=999999
+    grep -nE "allow\((clippy::)?($panic_lints)" "$f" \
+      | awk -F: -v b="$boundary" -v f="$f" '$1 < b { print f ":" $1 }'
+  done
+)
+if [ -n "$escapes" ]; then
+  fail "panic lint allowed outside a test module:"
+  echo "$escapes" | sed 's/^/       /'
+  echo "     The goal is no known way to panic at runtime. Handle the error instead,"
+  echo "     or move the code under #[cfg(test)]."
+else
+  pass "no panic lints allowed outside test modules"
+fi
+
 exit $status

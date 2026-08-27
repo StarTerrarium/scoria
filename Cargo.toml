@@ -41,9 +41,44 @@ thiserror = "2"
 anyhow = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] }
 
+[workspace.lints.rust]
+# CLAUDE.md: do not use unsafe anywhere without asking first. `forbid` is the
+# structural version of that -- it cannot be switched off by a local allow.
+unsafe_code = "forbid"
+
 [workspace.lints.clippy]
-# CLAUDE.md: never unwrap() outside tests, never panic! in the audio thread.
-# Enforced by the build rather than by review. Test modules opt out locally with
-# #![allow(clippy::unwrap_used)].
+# The goal is no known way for the application to panic at runtime. These are the
+# constructs that can take it down, denied at the workspace root so the build
+# fails rather than waiting for someone to notice in review.
+#
+# Test modules opt out locally, at the top of `mod tests`:
+#   #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+# scripts/check-boundaries.sh reports any such allow outside a test module, so
+# the escape hatch stays visible.
 unwrap_used = "deny"
 expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+exit = "deny"
+panic_in_result_fn = "deny"
+
+# Out-of-bounds indexing is the most likely remaining panic in a virtualised
+# table over a changing library. Use .get() and handle the None.
+indexing_slicing = "deny"
+# Slicing a String on a non-char-boundary panics, and every string here comes
+# from arbitrary tag metadata -- CJK titles make this a live concern, not theory.
+string_slice = "deny"
+
+float_cmp = "deny"
+mem_forget = "deny"
+
+# Deliberately NOT enabled: clippy::arithmetic_side_effects. It fires on every
+# `i + 1` and would force checked arithmetic through index and duration code that
+# cannot realistically overflow, at a real cost to readability -- which this
+# codebase values (CLAUDE.md: prefer clear over clever). Overflow is instead
+# handled by choosing types that cannot overflow in practice (u64 ids, Duration)
+# and by using checked/saturating arithmetic explicitly where a value is derived
+# from user input or file metadata. Integer division needs an explicit zero
+# guard; there is no lint that catches that for us.

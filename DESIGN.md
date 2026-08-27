@@ -97,6 +97,13 @@ Both enums derive `Serialize`/`Deserialize` from the start. We are not building 
 - **Async.** Scanning, tag reading, artwork caching, and database I/O run on tokio.
 - **UI.** Its own thread, receiving the event stream.
 
+**Failure containment.** The application is written to have no known panic path
+(see `CLAUDE.md`), but the audio thread also gets `catch_unwind` at its boundary
+as defence in depth. A panic there would otherwise kill audio silently, leaving a
+UI that still shows a playing track and a transport that does nothing -- the worst
+possible failure presentation. Caught, it becomes `Event::Error` and a stopped
+transport, which is at least honest. The same reasoning applies to the scan task.
+
 ### 3.4 Audio backend
 
 Behind a trait from day one:

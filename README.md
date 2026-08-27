@@ -46,13 +46,30 @@ sudo dnf install alsa-lib-devel
 sudo pacman -S alsa-lib
 ```
 
-Then:
+Then, with [`just`](https://github.com/casey/just):
+
+```sh
+just build
+just test
+just check    # the full gate CI runs: fmt, clippy, tests, invariants
+just          # list every recipe
+```
+
+Or with cargo directly:
 
 ```sh
 cargo build --workspace
 cargo test --workspace
 ./scripts/check-boundaries.sh   # architectural invariants CI also enforces
 ```
+
+## No-panic policy
+
+The application is written to have no known way to panic at runtime. `unwrap`,
+`expect`, `panic!`, direct indexing and slicing, and `unsafe` are denied
+workspace-wide rather than discouraged, and `scripts/check-boundaries.sh` flags
+any local `allow` that reopens one outside a test module. Errors are returned and
+surfaced through the event stream instead.
 
 ## Layout
 
