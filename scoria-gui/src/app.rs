@@ -909,27 +909,27 @@ impl App {
             ),
             artwork: self.artwork_view(),
         });
-
-        let base = layouts::arrange(
-            self.placement,
-            table::view(table_view, Message::Table),
-            transport::view(&transport_view, Message::Transport),
-            search.into(),
-            browser,
-            &self.theme,
-        );
-
-        match self.overlay {
-            None => base,
-            Some(overlay) => overlays::present(
-                base,
+        // Handed to the layout rather than wrapped around the finished view, so
+        // it covers the explorer and leaves the transport reachable.
+        let overlay = self.overlay.map(|overlay| {
+            overlays::present(
                 overlay,
                 self.overlay_content(overlay),
                 &self.theme,
                 self.overlay_progress(),
                 Message::CloseOverlay,
-            ),
-        }
+            )
+        });
+
+        layouts::arrange(
+            self.placement,
+            table::view(table_view, Message::Table),
+            transport::view(&transport_view, Message::Transport),
+            search.into(),
+            browser,
+            overlay,
+            &self.theme,
+        )
     }
 
     fn overlay_content(&self, overlay: Overlay) -> Element<'_, Message, Theme> {

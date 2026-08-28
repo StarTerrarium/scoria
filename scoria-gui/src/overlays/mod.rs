@@ -18,8 +18,8 @@ pub mod properties;
 pub mod queue;
 
 use crate::theme::Theme;
-use iced::widget::{center, column, container, mouse_area, opaque, row, stack, text};
-use iced::{Element, Fill};
+use iced::widget::{column, container, mouse_area, opaque, row, text};
+use iced::{Element, Fill, Length};
 use scoria_core::id::{AlbumId, TrackId};
 use std::time::{Duration, Instant};
 
@@ -39,20 +39,19 @@ pub enum Overlay {
 }
 
 impl Overlay {
-    /// How big the frame should be, in pixels.
+    /// How tall the drawer should be, in pixels.
     ///
-    /// Capped rather than proportional. A dialog that grows with the window
-    /// ends up covering nearly all of it on a large screen, and something
-    /// covering the screen is not read as an overlay whatever it is called.
+    /// Capped rather than proportional. A panel that grows with the window ends
+    /// up covering it, and something covering the screen is not read as an
+    /// overlay whatever it is called.
     #[must_use]
-    pub const fn max_size(self) -> (f32, f32) {
+    pub const fn max_height(self) -> f32 {
         match self {
-            // A play order is a tall narrow thing. Wider would be empty space.
-            Self::Queue => (760.0, 620.0),
-            // Album art is square, and this is the one place §2's "dense over
-            // pretty" gives way -- it exists to be looked at.
-            Self::Artwork(_) => (720.0, 760.0),
-            Self::Properties(_) => (680.0, 620.0),
+            Self::Queue => 560.0,
+            // Album art is square and exists to be looked at: the one place
+            // §2's "dense over pretty" gives way.
+            Self::Artwork(_) => 640.0,
+            Self::Properties(_) => 560.0,
         }
     }
 
@@ -104,60 +103,62 @@ pub fn progress(since: Instant, now: Instant) -> f32 {
     1.0 - (1.0 - linear).powi(3)
 }
 
-/// Puts `content` over `base` as a modal.
+/// Builds the drawer and the dimming behind it, as one layer.
 ///
-/// The scrim is `opaque`, which is what makes it modal: input stops there
-/// instead of reaching the table underneath. Clicking it closes, which is the
-/// behaviour every modal has and §9 does not need to state.
+/// Returns the layer rather than a finished view: where it goes is the layout's
+/// decision, and the layout puts it over the explorer only.
+///
+/// **The transport bar is never covered.** §9.2's modality is about not seeing
+/// the browse list and the play order at once, and the transport is neither --
+/// it is the thing the queue is *about*, so hiding it would remove the ability
+/// to pause or skip while reading the queue and gain nothing.
+///
+/// The drawer rises from the bottom edge, which is where the transport is, so
+/// it reads as belonging to it.
 #[must_use]
 pub fn present<'a, Message: Clone + 'a>(
-    base: Element<'a, Message, Theme>,
     overlay: Overlay,
     content: Element<'a, Message, Theme>,
     theme: &Theme,
     progress: f32,
     on_close: Message,
 ) -> Element<'a, Message, Theme> {
+    let progress = progress.clamp(0.0, 1.0);
     let frame_style = theme.overlay_style();
     let muted = theme.text_style(theme.muted_colour());
 
+    // Deliberately generous. A heading small enough to be efficient would not
+    // announce that anything had opened, which is the whole problem this is
+    // solving.
     let header = row![
-        text(overlay.title()).size(16),
+        text(overlay.title()).size(24),
         container(text("Esc to close").size(11).style(move |_t: &Theme| muted))
             .width(Fill)
             .align_x(iced::Right),
     ]
-    .spacing(10)
+    .spacing(12)
     .align_y(iced::Alignment::Center);
 
-    // Grows the last few percent as it appears. Small on purpose: enough to
-    // read as arriving, not so much that it looks like it is bouncing.
-    let scale = 0.96 + 0.04 * progress.clamp(0.0, 1.0);
-    let (max_width, max_height) = overlay.max_size();
-    let (max_width, max_height) = (max_width * scale, max_height * scale);
-    let frame = container(column![header, content].spacing(10))
-        .padding(16)
-        // Fill *up to* the cap, so a small window still gets a usable dialog
-        // and a large one does not get a full-screen panel.
+    // Height carries the animation: the drawer rises rather than fading in.
+    let drawer = container(column![header, content].spacing(12))
+        .padding([14, 18])
         .width(Fill)
-        .height(Fill)
-        .max_width(max_width)
-        .max_height(max_height)
+        .height(Length::Fixed(overlay.max_height() * progress))
         .style(move |_t: &Theme| frame_style);
 
-    // The frame swallows its own clicks, so clicking inside does not dismiss.
-    let dialog = mouse_area(frame);
+    // Clicks inside the drawer belong to it, not to the scrim behind.
+    let drawer = opaque(mouse_area(drawer));
 
     let scrim_style = theme.scrim_style(progress);
-    let scrim = mouse_area(
-        container(center(opaque(dialog)))
+    mouse_area(
+        container(drawer)
             .width(Fill)
             .height(Fill)
+            .align_y(iced::Bottom)
             .style(move |_t: &Theme| scrim_style),
     )
-    .on_press(on_close);
-
-    stack![base, opaque(scrim)].width(Fill).height(Fill).into()
+    .on_press(on_close)
+    .into()
 }
 
 #[cfg(test)]
@@ -253,17 +254,19 @@ mod tests {
     }
 
     #[test]
-    fn every_overlay_is_capped_below_a_typical_window() {
-        // The complaint that produced this: a dialog filling the screen does
-        // not read as an overlay, whatever it is called.
+    fn every_drawer_leaves_the_library_visible_above_it() {
+        // The complaint that produced this: a panel filling the screen does not
+        // read as an overlay whatever it is called.
         for overlay in [
             Overlay::Queue,
             Overlay::Artwork(None),
             Overlay::Properties(TrackId(1)),
         ] {
-            let (width, height) = overlay.max_size();
-            assert!(width <= 900.0, "{overlay:?} is {width} wide");
-            assert!(height <= 800.0, "{overlay:?} is {height} tall");
+            assert!(
+                overlay.max_height() <= 660.0,
+                "{overlay:?} is {} tall",
+                overlay.max_height()
+            );
         }
     }
 

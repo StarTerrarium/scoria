@@ -309,15 +309,19 @@ impl Theme {
             border: Border {
                 color: colour(self.roles.background.mix(self.roles.text, 0.28)),
                 width: 1.0,
-                radius: border::radius(8),
+                // Rounded at the top only: it rises from the transport bar and
+                // is joined to it rather than floating free.
+                radius: border::top(10),
             },
             shadow: iced::Shadow {
                 color: Color {
                     a: 0.55,
                     ..Color::BLACK
                 },
-                offset: iced::Vector::new(0.0, 10.0),
-                blur_radius: 28.0,
+                // Cast upward: the drawer is in front of the library, not
+                // resting on it.
+                offset: iced::Vector::new(0.0, -6.0),
+                blur_radius: 24.0,
             },
             ..container::Style::default()
         }

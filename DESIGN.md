@@ -448,6 +448,8 @@ One family, one set of rules. Four overlays with three dismissal behaviours woul
 
 - One at a time, never stacked. The state is a single `Option`, so two cannot be expressed.
 - **An overlay must read as a layer, not as a change of screen.** Three things make that true, and the first version had none of them: it is capped in size rather than proportional, so it never covers the window; the library stays visible behind a partial scrim, because there is nothing to be *on top of* if the thing underneath is invisible; and it casts a shadow, which is the strongest depth cue a flat interface has.
+- **An overlay is a drawer rising from the transport bar, and never covers it.** The modality §9.2 asks for is about not seeing the browse list and the play order at once. The transport is neither -- it is the thing the queue is *about*. Covering it would remove the ability to pause, skip or seek while reading the queue, which is exactly what someone looking at a play order is likely to want, and would gain nothing in return.
+- **The heading is deliberately larger than density would justify.** An overlay that opens quietly is one you are not sure opened. This is a small, contained exception to §2's "dense over pretty": it is the announcement, not decoration.
 - **It appears over about a seventh of a second** rather than between one frame and the next. Something that is simply there does not register as having arrived, and the complaint that produced this rule was not being sure anything had happened at all. Every path that opens or replaces one restarts the transition -- a second overlay appearing fully formed would reintroduce exactly that doubt.
 - Escape closes. The key that opened it toggles it. With no overlay open, Escape clears the filters instead (§7.2) -- one key backing out of whatever is currently narrowing the view, rather than two bindings competing for it.
 - **"The key that opened it" means the same request, not the same kind.** Asking for a second track's properties replaces what is showing rather than closing it: you asked to see something, and answering by showing nothing would be a strange reading of "toggle". An identical request closes; anything else replaces.
@@ -463,7 +465,7 @@ Escape hatch: right-clicking any track offers "Show album art", which opens the 
 
 ### 9.2 Queue
 
-Modal, on top of the explorer. Modality is the point: being able to see both at once would recreate the ambiguity the separation exists to remove.
+Modal over the explorer, as a drawer rising from the transport bar. Modality is the point: being able to see the browse list and the play order at once would recreate the ambiguity the separation exists to remove. The transport stays visible and usable -- see §9's rules for why that is not a contradiction.
 
 Uses the track table pointed at `tracks` -- the same widget, not a second one, which is invariant 3 doing its job. Shows the whole snapshot with the current position marked and scrolled into view, including already-played tracks. Double-click sets `position`.
 

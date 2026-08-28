@@ -106,6 +106,12 @@ const _: () = assert!(
 ///
 /// The three placements differ here and nowhere else. Every component is the
 /// same object in all three.
+///
+/// `overlay` is applied to the explorer -- the search field, panes and table --
+/// and never to the transport. It is taken as a function rather than an element
+/// so it can be laid over the explorer *after* it has been arranged. §9 covers
+/// the browse list and never the playback controls, so that what is playing can
+/// still be changed while the queue is being read.
 #[must_use]
 pub fn arrange<'a, Message: 'a>(
     placement: BrowserPlacement,
@@ -113,6 +119,7 @@ pub fn arrange<'a, Message: 'a>(
     transport: Element<'a, Message, Theme>,
     search: Element<'a, Message, Theme>,
     browser: Option<Browser<'a, Message>>,
+    overlay: Option<Element<'a, Message, Theme>>,
     theme: &Theme,
 ) -> Element<'a, Message, Theme> {
     let body: Element<'a, Message, Theme> = match (placement, browser) {
@@ -160,8 +167,19 @@ pub fn arrange<'a, Message: 'a>(
         .into(),
     };
 
+    // The overlay covers the explorer -- search field, panes and table -- and
+    // stops at the transport.
+    let explorer = column![search, body].width(Fill).height(Fill);
+    let explorer: Element<'a, Message, Theme> = match overlay {
+        Some(layer) => iced::widget::stack![explorer, iced::widget::opaque(layer)]
+            .width(Fill)
+            .height(Fill)
+            .into(),
+        None => explorer.into(),
+    };
+
     let style = theme.window_style();
-    container(column![search, body, transport].width(Fill).height(Fill))
+    container(column![explorer, transport].width(Fill).height(Fill))
         .width(Fill)
         .height(Fill)
         .style(move |_t: &Theme| style)
