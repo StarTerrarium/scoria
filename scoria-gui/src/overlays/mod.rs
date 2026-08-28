@@ -18,7 +18,9 @@ pub mod properties;
 pub mod queue;
 
 use crate::theme::Theme;
-use iced::widget::{Space, column, container, mouse_area, opaque, responsive, row, stack, text};
+use iced::widget::{
+    Space, button, column, container, mouse_area, opaque, responsive, row, stack, text, tooltip,
+};
 use iced::{Element, Fill, Length};
 use scoria_core::id::{AlbumId, TrackId};
 use std::time::{Duration, Instant};
@@ -275,11 +277,23 @@ pub fn present<'a, Message: Clone + 'a>(
 
     // Deliberately generous. A heading small enough to be efficient would not
     // announce that anything had opened, which is the problem this solves.
+    //
+    // The close button is not decoration: Escape is the fast path for someone
+    // who knows it, not the only way out. Discovering a modal you cannot see
+    // how to dismiss is a bad first minute.
+    let close = tooltip(
+        button(text("✕").size(15))
+            .padding([2, 8])
+            .on_press(on_close.clone())
+            .style(|t: &Theme, status| t.transport_button(status, false)),
+        text("Close (Esc)").size(12),
+        tooltip::Position::Left,
+    );
+
     let header = row![
         text(overlay.title()).size(24),
-        container(text("Esc to close").size(11).style(move |_t: &Theme| muted))
-            .width(Fill)
-            .align_x(iced::Right),
+        container(text(String::new()).size(11).style(move |_t: &Theme| muted)).width(Fill),
+        close,
     ]
     .spacing(12)
     .align_y(iced::Alignment::Center);

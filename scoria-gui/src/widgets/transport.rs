@@ -20,6 +20,11 @@ use std::time::Duration;
 /// What the bar shows.
 pub struct TransportView<'a> {
     pub track: Option<&'a Track>,
+    /// The playing album's cached artwork. §9.1: it follows what is playing,
+    /// with no mode and no toggle.
+    pub artwork: Option<std::path::PathBuf>,
+    /// Whether the queue is open, so its button can show it.
+    pub queue_open: bool,
     pub state: PlaybackState,
     pub position: Duration,
     /// Where the user is dragging the seek bar, if they are.
@@ -46,6 +51,8 @@ pub enum Event {
     SetVolume(f32),
     /// Clicking the thumbnail opens the artwork overlay (§9.1).
     ShowArtwork,
+    /// §9.2's queue, reachable without knowing a keybinding.
+    ToggleQueue,
     /// The seek bar is being dragged, to this position in seconds.
     Scrub(f32),
     /// The drag finished: go there.
@@ -69,13 +76,23 @@ pub fn view<'a, Message: Clone + 'a>(
 
     // The thumbnail. Artwork always follows what is playing (§9.1), so this
     // needs no mode and no toggle -- it shows whatever the transport shows.
+    let thumbnail: Element<'a, Message, Theme> = match transport.artwork.clone() {
+        Some(path) => iced::widget::image(path)
+            .width(Length::Fixed(38.0))
+            .height(Length::Fixed(38.0))
+            .content_fit(iced::ContentFit::Cover)
+            .into(),
+        None => text("♪").size(20).into(),
+    };
     let artwork = button(
-        container(text("♪").size(20))
+        container(thumbnail)
             .width(Length::Fixed(40.0))
             .height(Length::Fixed(40.0))
             .align_x(Alignment::Center)
-            .align_y(Alignment::Center),
+            .align_y(Alignment::Center)
+            .clip(true),
     )
+    .padding(1)
     .on_press(on_event(Event::ShowArtwork))
     .style(|t: &Theme, status| t.transport_button(status, false));
 
@@ -172,6 +189,9 @@ pub fn view<'a, Message: Clone + 'a>(
         // §8: a crosshair, matching the "reveal current item" convention from
         // editors and file managers.
         symbol("⌖", "Jump to what is playing", Event::JumpToPlaying, false),
+        // The queue needs a way in that does not require knowing a keybinding.
+        // §10 makes the keyboard a complete path, not the only one.
+        symbol("≡", "Queue", Event::ToggleQueue, transport.queue_open),
         slider(0.0..=1.0, transport.volume, move |v| on_event(
             Event::SetVolume(v)
         ))

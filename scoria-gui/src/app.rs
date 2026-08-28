@@ -651,6 +651,7 @@ impl App {
             // The artwork overlay arrives at M9.
             // §9.1: the resting state is the thumbnail; clicking it opens the
             // playing track's art full size.
+            transport::Event::ToggleQueue => return self.open_overlay(Overlay::Queue),
             transport::Event::ShowArtwork => {
                 self.set_overlay(overlays::toggle(
                     self.open_overlay_kind(),
@@ -897,6 +898,8 @@ impl App {
         let now_playing = self.playing.and_then(|id| self.track(id));
         let transport_view = transport::TransportView {
             track: now_playing,
+            artwork: now_playing.and_then(|t| self.session.as_ref()?.artwork().get(t.album_id)),
+            queue_open: self.open_overlay_kind() == Some(Overlay::Queue),
             state: self.state,
             position: self.position,
             scrubbing: self.scrubbing,
