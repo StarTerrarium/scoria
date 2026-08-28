@@ -92,6 +92,22 @@ pub fn visible_range(lines: usize, scroll_offset: f32, viewport_height: f32) -> 
     (start, end)
 }
 
+/// The scroll offset that puts `line` in the middle of the viewport.
+///
+/// Clamped to the real scroll range. That is not tidiness: the application
+/// tracks the offset itself in order to decide which rows to build, and the
+/// widget clamps whatever it is given. An unclamped offset would leave the two
+/// disagreeing, and the table would build a window the viewer is not looking at.
+#[must_use]
+pub fn centre_offset(line: usize, lines: usize, viewport_height: f32) -> f32 {
+    let content = lines as f32 * ROW_HEIGHT;
+    let furthest = (content - viewport_height).max(0.0);
+
+    let row_top = line as f32 * ROW_HEIGHT;
+    let centred = row_top - (viewport_height - ROW_HEIGHT) / 2.0;
+    centred.clamp(0.0, furthest)
+}
+
 /// What the table needs in order to draw itself.
 pub struct TableView<'a> {
     pub lines: &'a [Line],
@@ -328,6 +344,8 @@ impl NumberCell for Option<u16> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::float_cmp)]
+
     use super::*;
 
     fn group(label: &str, start: usize, len: usize) -> Group {
@@ -489,6 +507,50 @@ mod tests {
         // built yet.
         let (start, _) = visible_range(1000, 10.0 * ROW_HEIGHT, 800.0);
         assert!(start < 10, "should start above the first visible row");
+    }
+
+    #[test]
+    fn centring_puts_the_row_in_the_middle() {
+        // §6.5 leans on this: landing on the playing track should put the
+        // artist's other albums immediately above and below it. At the top edge
+        // there is nothing above.
+        let viewport = 800.0;
+        let offset = centre_offset(500, 1000, viewport);
+
+        let row_top = 500.0 * ROW_HEIGHT;
+        let middle = offset + viewport / 2.0;
+        assert!(
+            (row_top + ROW_HEIGHT / 2.0 - middle).abs() < ROW_HEIGHT,
+            "row centre {} is not near viewport centre {middle}",
+            row_top + ROW_HEIGHT / 2.0
+        );
+    }
+
+    #[test]
+    fn centring_near_the_start_stops_at_the_top() {
+        // There is nothing above row 2 to scroll to, so asking for it centred
+        // must not produce a negative offset.
+        assert!(centre_offset(2, 1000, 800.0) >= 0.0);
+        assert_eq!(centre_offset(0, 1000, 800.0), 0.0);
+    }
+
+    #[test]
+    fn centring_near_the_end_stops_at_the_bottom() {
+        // Past the end the widget would clamp and we would not, and then the
+        // built window and the visible one would be different rows.
+        let viewport = 800.0;
+        let lines = 100;
+        let offset = centre_offset(99, lines, viewport);
+        let furthest = (lines as f32 * ROW_HEIGHT - viewport).max(0.0);
+        assert!(
+            offset <= furthest,
+            "{offset} overshoots the end at {furthest}"
+        );
+    }
+
+    #[test]
+    fn a_list_shorter_than_the_viewport_never_scrolls() {
+        assert_eq!(centre_offset(3, 5, 800.0), 0.0);
     }
 
     #[test]

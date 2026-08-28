@@ -539,9 +539,37 @@ impl App {
 
         if let Some(index) = self.rows.iter().position(|id| *id == playing) {
             self.cursor = Some(index);
-            return self.scroll_to_cursor();
+            // Centred, not merely brought into view. §6.5 argues that jumping
+            // to the playing track needs no album or artist filter because the
+            // default sort already surrounds it with its own album and the
+            // artist's neighbouring ones -- and that context only exists if the
+            // track lands in the middle rather than against an edge.
+            return self.centre_on_cursor();
         }
         Task::none()
+    }
+
+    /// Scrolls so the cursor sits in the middle of the table.
+    ///
+    /// Distinct from [`Self::scroll_to_cursor`], which moves as little as it
+    /// can. Arrow keys want the minimum, or the view lurches on every press;
+    /// arriving somewhere from elsewhere wants the context that surrounds it.
+    fn centre_on_cursor(&mut self) -> Task<Message> {
+        let Some(cursor) = self.cursor else {
+            return Task::none();
+        };
+        let Some(line) = self.line_of_row(cursor) else {
+            return Task::none();
+        };
+
+        self.scroll_offset = table::centre_offset(line, self.lines.len(), self.viewport_height);
+        iced::widget::operation::scroll_to(
+            iced::widget::Id::new(TABLE_ID),
+            iced::widget::scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: self.scroll_offset,
+            },
+        )
     }
 
     /// Turns the cursor into a snapshot and plays it.

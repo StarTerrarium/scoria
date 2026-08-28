@@ -310,6 +310,8 @@ Restores an unfiltered full-library view and scrolls to the playing track.
 
 Deliberately not scoped to the track's album or artist, because we cannot predict which the user wants. It works anyway: the default sort is album artist → album → disc → track, so landing on the playing track in the unfiltered library automatically places it inside its album, with the artist's other albums immediately above and below. Album and artist context come from the sort order without choosing a filter.
 
+**The track lands centred, not merely brought into view.** The argument above depends on it: there is no context above a row sitting against the top edge. This is the one place scrolling centres -- keyboard movement scrolls as little as it can, or the view lurches on every keypress.
+
 Consequence: `origin` restores nothing. It is purely a label, which makes "origin never drives playback" true by construction rather than by discipline.
 
 ### 6.6 Shuffle and repeat
