@@ -16,6 +16,7 @@
 
 use crate::theme::{RowState, Theme};
 use crate::widgets::table::{ROW_HEIGHT, visible_range};
+use crate::widgets::{SCROLLBAR_ALLOWANCE, SCROLLBAR_SPACING};
 use iced::widget::{Space, column, container, mouse_area, responsive, row, scrollable, text};
 use iced::{Alignment, Element, Fill, Length};
 
@@ -68,22 +69,27 @@ pub fn view<'a, Message: Clone + 'a>(
     let theme = pane.theme;
     let heading_style = theme.header_style();
     let heading = container(text(pane.heading.to_owned()).size(11))
-        .padding([0, 6])
+        .padding(iced::Padding::from([0.0, 6.0]))
         .height(Length::Fixed(ROW_HEIGHT))
         .align_y(Alignment::Center)
         .width(Fill)
         .style(move |_t: &Theme| heading_style);
+    let heading = container(heading).padding(right_gutter());
 
     // §7.2: `All (n)` is pinned, not scrolled. It is the way back out of a
     // filter, so it must never be somewhere you have to look for it.
-    let all = pane_row(
+    //
+    // Being outside the scrollable, it has to reserve the scrollbar's width
+    // itself, or its count sits proud of every count below it.
+    let all = container(pane_row(
         "All".to_owned(),
         pane.total,
         pane.all_selected(),
         false,
         theme,
         on_event(Event::SelectAll),
-    );
+    ))
+    .padding(right_gutter());
 
     // Virtualised for the same reason the table is: a large library has
     // thousands of album artists, and building a widget per row would cost the
@@ -119,6 +125,9 @@ pub fn view<'a, Message: Clone + 'a>(
 
         scrollable(list)
             .id(iced::widget::Id::new(id))
+            // Embedded rather than floating, so the bar sits beside the counts
+            // instead of on top of them.
+            .spacing(SCROLLBAR_SPACING)
             .height(Fill)
             .width(Fill)
             .on_scroll(move |viewport| {
@@ -131,6 +140,16 @@ pub fn view<'a, Message: Clone + 'a>(
     });
 
     column![heading, all, body].width(Fill).height(Fill).into()
+}
+
+/// Padding that reserves the width an embedded scrollbar takes.
+fn right_gutter() -> iced::Padding {
+    iced::Padding {
+        top: 0.0,
+        right: SCROLLBAR_ALLOWANCE,
+        bottom: 0.0,
+        left: 0.0,
+    }
 }
 
 fn pane_row<'a, Message: Clone + 'a>(

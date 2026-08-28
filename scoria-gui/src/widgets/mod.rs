@@ -9,6 +9,22 @@ pub mod transport;
 
 use std::time::Duration;
 
+/// Gap between an embedded scrollbar and the content beside it.
+///
+/// iced floats scrollbars over the content by default, which puts the scrollbar
+/// on top of whatever is at the right edge -- in a filter pane, that is the
+/// count. Giving the scrollable a spacing embeds it in the layout instead, so
+/// the content is narrowed rather than covered.
+pub const SCROLLBAR_SPACING: f32 = 2.0;
+
+/// How much width an embedded scrollbar takes: iced's default 10px bar plus
+/// [`SCROLLBAR_SPACING`].
+///
+/// Anything drawn *outside* a scrollable but meant to line up with the rows
+/// inside it -- a column header, a pinned `All` row -- has to reserve the same,
+/// or its right-hand column sits proud of the ones below it.
+pub const SCROLLBAR_ALLOWANCE: f32 = 10.0 + SCROLLBAR_SPACING;
+
 /// `3:47`, or `1:02:11` for something long.
 ///
 /// Here rather than in the table because the transport bar shows the same

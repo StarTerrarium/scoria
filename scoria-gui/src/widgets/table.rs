@@ -168,6 +168,9 @@ pub fn view<'a, Message: Clone + 'a>(
 
         scrollable(rows)
             .id(iced::widget::Id::new(table.id))
+            // Embedded rather than floating, so the bar sits beside the last
+            // column instead of on top of it.
+            .spacing(crate::widgets::SCROLLBAR_SPACING)
             .height(Fill)
             .width(Fill)
             .on_scroll(move |viewport| {
@@ -203,6 +206,12 @@ fn header<'a, Message: 'a>(theme: &Theme) -> Element<'a, Message, Theme> {
         .height(Length::Fixed(ROW_HEIGHT)),
     )
     .style(move |_theme: &Theme| style)
+    .padding(iced::Padding {
+        top: 0.0,
+        right: crate::widgets::SCROLLBAR_ALLOWANCE,
+        bottom: 0.0,
+        left: 0.0,
+    })
     .width(Fill)
     .into()
 }
