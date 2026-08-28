@@ -72,6 +72,8 @@ pub struct App {
     playing: Option<TrackId>,
     state: PlaybackState,
     position: Duration,
+    /// Set while the seek bar is being dragged. See `TransportView::scrubbing`.
+    scrubbing: Option<Duration>,
     shuffled: bool,
     repeat: RepeatMode,
     volume: f32,
@@ -115,6 +117,7 @@ impl App {
             playing: None,
             state: PlaybackState::Stopped,
             position: Duration::ZERO,
+            scrubbing: None,
             shuffled: false,
             repeat: RepeatMode::Off,
             volume: 1.0,
@@ -182,8 +185,17 @@ impl App {
                 CoreEvent::TrackChanged { track, .. } => {
                     self.playing = Some(track);
                     self.position = Duration::ZERO;
+                    // A track change mid-drag means the drag refers to a track
+                    // that is no longer playing.
+                    self.scrubbing = None;
                 }
-                CoreEvent::PositionChanged(position) => self.position = position,
+                CoreEvent::PositionChanged(position) => {
+                    // Ignored while dragging: the handle belongs to the pointer
+                    // until it is released.
+                    if self.scrubbing.is_none() {
+                        self.position = position;
+                    }
+                }
                 CoreEvent::PlaybackStateChanged(state) => {
                     self.state = state;
                     if state == PlaybackState::Stopped {
@@ -237,6 +249,18 @@ impl App {
                 Command::SetVolume(v)
             }
             transport::Event::JumpToPlaying => return self.jump_to_playing(),
+            transport::Event::Scrub(seconds) => {
+                self.scrubbing = Some(Duration::from_secs_f32(seconds.max(0.0)));
+                return Task::none();
+            }
+            transport::Event::SeekTo(position) => {
+                self.scrubbing = None;
+                // Show the requested position at once rather than waiting for
+                // the engine to report it, so the handle does not snap back for
+                // a fraction of a second on release.
+                self.position = position;
+                Command::Seek(position)
+            }
             // The artwork overlay arrives at M9.
             transport::Event::ShowArtwork => return Task::none(),
         };
@@ -428,6 +452,7 @@ impl App {
             track: now_playing,
             state: self.state,
             position: self.position,
+            scrubbing: self.scrubbing,
             shuffled: self.shuffled,
             repeat: self.repeat,
             volume: self.volume,

@@ -10,7 +10,7 @@
 
 use crate::theme::Theme;
 use crate::widgets::format_duration;
-use iced::widget::{button, column, container, row, slider, text, tooltip};
+use iced::widget::{Space, button, column, container, row, slider, text, tooltip};
 use iced::{Alignment, Element, Fill, Length};
 use scoria_core::event::PlaybackState;
 use scoria_core::model::Track;
@@ -22,6 +22,12 @@ pub struct TransportView<'a> {
     pub track: Option<&'a Track>,
     pub state: PlaybackState,
     pub position: Duration,
+    /// Where the user is dragging the seek bar, if they are.
+    ///
+    /// While dragging, this is what the bar and the elapsed time show. Letting
+    /// the engine's own position updates through would drag the handle back out
+    /// from under the pointer several times a second.
+    pub scrubbing: Option<Duration>,
     pub shuffled: bool,
     pub repeat: RepeatMode,
     pub volume: f32,
@@ -40,6 +46,10 @@ pub enum Event {
     SetVolume(f32),
     /// Clicking the thumbnail opens the artwork overlay (§9.1).
     ShowArtwork,
+    /// The seek bar is being dragged, to this position in seconds.
+    Scrub(f32),
+    /// The drag finished: go there.
+    SeekTo(Duration),
 }
 
 #[must_use]
@@ -85,10 +95,12 @@ pub fn view<'a, Message: Clone + 'a>(
     .spacing(1)
     .width(Fill);
 
-    let elapsed = format_duration(transport.position);
-    let total = transport
-        .track
-        .map_or_else(|| "0:00".to_owned(), |t| format_duration(t.duration));
+    // While dragging, the time reads where the pointer is rather than where
+    // playback still is, so the number and the handle agree.
+    let shown_position = transport.scrubbing.unwrap_or(transport.position);
+    let elapsed = format_duration(shown_position);
+    let duration = transport.track.map_or(Duration::ZERO, |t| t.duration);
+    let total = format_duration(duration);
 
     let repeat_glyph = match transport.repeat {
         RepeatMode::Off | RepeatMode::All => "⟳",
@@ -132,8 +144,34 @@ pub fn view<'a, Message: Clone + 'a>(
     .padding([6, 10])
     .align_y(Alignment::Center);
 
+    // A full-width bar along the top edge of the transport.
+    //
+    // Inline between the title and the clock would have been the conventional
+    // placement, but it would compress the one part of the bar that carries
+    // information. Full width also gives the most precision, which is what a
+    // ten-minute track needs. §2: dense over pretty.
+    //
+    // A track of unknown or zero length gets an inert strip rather than a
+    // movable control: there is nowhere to seek to, and a handle that moves
+    // without doing anything is worse than one that does not move.
+    let seconds = duration.as_secs_f32();
+    let seek: Element<'a, Message, Theme> = if seconds > 0.0 {
+        slider(
+            0.0..=seconds,
+            shown_position.as_secs_f32().min(seconds),
+            move |v| on_event(Event::Scrub(v)),
+        )
+        .step(0.1_f32)
+        .height(6.0)
+        .on_release(on_event(Event::SeekTo(shown_position)))
+        .width(Fill)
+        .into()
+    } else {
+        Space::new().height(Length::Fixed(6.0)).width(Fill).into()
+    };
+
     let style = theme.surface_style();
-    container(bar)
+    container(column![seek, bar].spacing(2))
         .width(Fill)
         .style(move |_t: &Theme| style)
         .into()

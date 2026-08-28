@@ -405,7 +405,13 @@ Files that vanish are shown struck through with a marker, not removed. Playback 
 
 Always visible, identical across all three layouts.
 
-Contents: artwork thumbnail, symbol-only transport controls, shuffle and repeat toggles, track title, `artist — album`, jump-to-playing, elapsed/total, volume.
+Contents: a seek bar, then a row of artwork thumbnail, symbol-only transport controls, shuffle and repeat toggles, track title, `artist — album`, jump-to-playing, elapsed/total, volume.
+
+**The seek bar spans the full width, above the controls.** An earlier version of this list omitted it entirely, which was an oversight rather than a decision: `Command::Seek` is in §3.2 and `AudioBackend::seek` is in §3.4, so seeking was implemented end to end with no way to ask for it.
+
+Inline between the title and the clock is the conventional placement and is wrong here, because it compresses the part of the bar that carries information. Full width also gives the most precision, which is what a ten-minute track needs.
+
+While it is being dragged, the bar and the elapsed time both show where the pointer is rather than where playback still is; position updates from the engine are ignored until release, or the handle would be pulled back out from under the pointer several times a second. A track of unknown length gets an inert strip rather than a movable handle, because a control that moves without doing anything is worse than one that does not move.
 
 Symbol buttons only, with hover tooltips. Jump-to-playing uses a crosshair/target glyph, matching the "reveal current item" convention from editors and file managers.
 
