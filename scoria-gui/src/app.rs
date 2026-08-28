@@ -9,9 +9,9 @@
 //! `Session` is the one thing held, and it only accepts commands.
 
 use crate::keymap::{Action, Keymap};
-use crate::layouts::{self, BrowserPlacement};
+use crate::layouts::{self, Browser, BrowserPlacement};
 use crate::theme::Theme;
-use crate::widgets::{table, transport};
+use crate::widgets::{panes, table, transport};
 use iced::widget::{container, row, text, text_input};
 use iced::{Element, Fill, Length, Subscription, Task};
 use scoria_core::command::Command;
@@ -33,11 +33,13 @@ use std::time::Duration;
 /// This is also the seek bar's frame rate, since the bar redraws when a
 /// position event is handled. Twenty a second is smooth to the eye and costs a
 /// redraw of a virtualised table, which is a few dozen rows.
-const POLL: Duration = Duration::from_millis(50);
+const POLL: Duration = Duration::from_millis(25);
 
 const SEARCH_ID: &str = "search";
 /// The table's scrollable, so the cursor can drag the view with it.
 const TABLE_ID: &str = "tracks";
+const ARTIST_PANE_ID: &str = "artists";
+const ALBUM_PANE_ID: &str = "albums";
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -45,6 +47,8 @@ pub enum Message {
     Tick,
     Table(table::Event),
     Transport(transport::Event),
+    ArtistPane(panes::Event),
+    AlbumPane(panes::Event),
     SearchChanged(String),
     /// A key press, already resolved through the keymap.
     Action(Action),
@@ -66,6 +70,14 @@ pub struct App {
     rows: Vec<TrackId>,
     lines: Vec<table::Line>,
     search: String,
+    /// The panes, as the last query computed them. §7.2: contextual counts are
+    /// the query engine's answer, not something the view recomputes.
+    artists: Vec<panes::PaneRow>,
+    artist_total: usize,
+    albums: Vec<(scoria_core::AlbumId, panes::PaneRow)>,
+    album_total: usize,
+    artist_scroll: f32,
+    album_scroll: f32,
 
     /// The row the keyboard is on. Selection is deliberately independent of
     /// playback -- §6.1: browsing never disturbs what is playing, and the two
@@ -116,6 +128,12 @@ impl App {
             rows: Vec::new(),
             lines: Vec::new(),
             search: String::new(),
+            artists: Vec::new(),
+            artist_total: 0,
+            albums: Vec::new(),
+            album_total: 0,
+            artist_scroll: 0.0,
+            album_scroll: 0.0,
             cursor: None,
             playing: None,
             state: PlaybackState::Stopped,
@@ -141,6 +159,35 @@ impl App {
             Ok(outcome) => {
                 self.lines = table::build_lines(outcome.tracks.len(), &outcome.groups);
                 self.rows = outcome.tracks;
+
+                self.artist_total = outcome.album_artists.total;
+                self.artists = outcome
+                    .album_artists
+                    .rows
+                    .into_iter()
+                    .map(|r| panes::PaneRow {
+                        label: r.label,
+                        count: r.count,
+                        selected: r.selected,
+                    })
+                    .collect();
+
+                self.album_total = outcome.albums.total;
+                self.albums = outcome
+                    .albums
+                    .rows
+                    .into_iter()
+                    .map(|r| {
+                        (
+                            r.id,
+                            panes::PaneRow {
+                                label: r.label,
+                                count: r.count,
+                                selected: r.selected,
+                            },
+                        )
+                    })
+                    .collect();
                 self.status = format!(
                     "{} of {} tracks{}",
                     self.rows.len(),
@@ -174,6 +221,8 @@ impl App {
                 self.scroll_offset = 0.0;
                 self.refresh();
             }
+            Message::ArtistPane(event) => self.on_artist_pane(event),
+            Message::AlbumPane(event) => self.on_album_pane(event),
             Message::Action(action) => return self.on_action(action),
         }
         Task::none()
@@ -232,6 +281,53 @@ impl App {
                 self.viewport_height = viewport;
             }
         }
+    }
+
+    fn on_artist_pane(&mut self, event: panes::Event) {
+        match event {
+            panes::Event::SelectAll => {
+                self.selection.album_artists.clear();
+                // The album pane is downstream, so its selection may name an
+                // album that is no longer reachable. §7.2's cascade flows one
+                // way; changing an upstream pane resets what is below it.
+                self.selection.albums.clear();
+                self.reset_view();
+            }
+            panes::Event::Select(index) => {
+                if let Some(row) = self.artists.get(index) {
+                    self.selection.album_artists = vec![row.label.clone()];
+                    self.selection.albums.clear();
+                    self.reset_view();
+                }
+            }
+            panes::Event::Scrolled { offset, .. } => self.artist_scroll = offset,
+        }
+    }
+
+    fn on_album_pane(&mut self, event: panes::Event) {
+        match event {
+            panes::Event::SelectAll => {
+                self.selection.albums.clear();
+                self.reset_view();
+            }
+            panes::Event::Select(index) => {
+                if let Some((id, _)) = self.albums.get(index) {
+                    self.selection.albums = vec![*id];
+                    self.reset_view();
+                }
+            }
+            panes::Event::Scrolled { offset, .. } => self.album_scroll = offset,
+        }
+    }
+
+    /// Re-runs the query and returns the table to the top.
+    ///
+    /// Keeping the old scroll position after a filter change would leave the
+    /// view somewhere arbitrary in a list that is now a different length.
+    fn reset_view(&mut self) {
+        self.scroll_offset = 0.0;
+        self.cursor = None;
+        self.refresh();
     }
 
     fn on_transport(&mut self, event: transport::Event) -> Task<Message> {
@@ -481,14 +577,70 @@ impl App {
         .padding([6, 10])
         .width(Fill);
 
+        // Built only when a placement will use it: `Off` shows no panes, and
+        // constructing them would be work thrown away every frame.
+        let browser = (self.placement != BrowserPlacement::Off).then(|| Browser {
+            artists: panes::view(
+                panes::PaneView {
+                    heading: "ALBUM ARTIST",
+                    rows: self.artists.clone(),
+                    total: self.artist_total,
+                    scroll_offset: self.artist_scroll,
+                    theme: &self.theme,
+                    id: ARTIST_PANE_ID,
+                },
+                Message::ArtistPane,
+            ),
+            albums: panes::view(
+                panes::PaneView {
+                    heading: "ALBUM",
+                    rows: self.albums.iter().map(|(_, row)| row.clone()).collect(),
+                    total: self.album_total,
+                    scroll_offset: self.album_scroll,
+                    theme: &self.theme,
+                    id: ALBUM_PANE_ID,
+                },
+                Message::AlbumPane,
+            ),
+            artwork: self.artwork_view(),
+        });
+
         layouts::arrange(
             self.placement,
             table::view(table_view, Message::Table),
             transport::view(&transport_view, Message::Transport),
             search.into(),
-            None,
+            browser,
             &self.theme,
         )
+    }
+
+    /// The now-playing album's artwork, or a placeholder.
+    ///
+    /// §9.1: artwork always follows what is playing. There is no mode and no
+    /// toggle, here or anywhere else it appears.
+    fn artwork_view(&self) -> Element<'_, Message, Theme> {
+        let path = self
+            .playing
+            .and_then(|id| self.track(id))
+            .and_then(|track| self.session.as_ref()?.artwork().get(track.album_id));
+
+        match path {
+            Some(path) => iced::widget::image(path)
+                .width(Fill)
+                .height(Fill)
+                .content_fit(iced::ContentFit::Contain)
+                .into(),
+            None => {
+                let muted = self.theme.text_style(self.theme.muted_colour());
+                container(text("♪").size(40).style(move |_t: &Theme| muted))
+                    .width(Fill)
+                    .height(Fill)
+                    .align_x(iced::Alignment::Center)
+                    .align_y(iced::Alignment::Center)
+                    .into()
+            }
+        }
     }
 
     pub fn theme(&self) -> Theme {

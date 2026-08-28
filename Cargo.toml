@@ -17,7 +17,14 @@ scoria-core = { path = "scoria-core" }
 scoria-gui = { path = "scoria-gui" }
 
 # UI. Only ever depended on by scoria-gui -- see scripts/check-boundaries.sh.
-iced = { version = "0.14", features = ["tokio"] }
+# Drawing album art needs an image codec. `image-without-codecs` plus an
+# explicit codec list rather than iced's `image` feature, which pulls in AVIF
+# *encoding* through rav1e -- a dependency chain that does not currently
+# resolve, and that a music player has no use for either way.
+#
+# GUI only: scoria-core still has no image dependency, because it stores
+# artwork exactly as found rather than rescaling it (DESIGN.md 5.3).
+iced = { version = "0.14", features = ["tokio", "image-without-codecs"] }
 
 # Audio. rodio drives Symphonia itself through its own feature flags, so a direct
 # symphonia dependency is not needed until gapless trimming (DESIGN.md 3.4) wants
@@ -37,6 +44,13 @@ toml = "1"
 
 # Desktop integration.
 souvlaki = "0.8"
+image = { version = "0.25", default-features = false, features = [
+    "jpeg",
+    "png",
+    "webp",
+    "gif",
+    "bmp",
+] }
 
 # Plumbing.
 serde = { version = "1", features = ["derive"] }

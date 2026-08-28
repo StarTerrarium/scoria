@@ -27,7 +27,7 @@ use std::time::Duration;
 /// an idle player is not busy. This is a poll rather than a callback because
 /// the backend trait deliberately does not hand out callbacks: a callback would
 /// run on the backend's own thread, and then two threads would own the source.
-const TICK: Duration = Duration::from_millis(50);
+const TICK: Duration = Duration::from_millis(25);
 
 /// How close to the end of a track the next one is prepared.
 ///
