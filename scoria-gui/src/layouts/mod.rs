@@ -72,6 +72,19 @@ const TOP_HEIGHT: f32 = 220.0;
 /// Square, and the reason the strip is as tall as it is.
 const ARTWORK_SIZE: f32 = TOP_HEIGHT - 12.0;
 
+// §7.1: the artwork is not decoration filling leftover space -- it justifies a
+// strip height the panes need anyway. Checked at build time rather than in a
+// test, because both values are constants and a test could only ever agree with
+// the compiler.
+const _: () = assert!(
+    ARTWORK_SIZE <= TOP_HEIGHT,
+    "the artwork cannot exceed the strip"
+);
+const _: () = assert!(
+    ARTWORK_SIZE > TOP_HEIGHT * 0.9,
+    "the strip is no longer sized around the artwork"
+);
+
 /// Arranges the pieces.
 ///
 /// The three placements differ here and nowhere else. Every component is the
@@ -192,14 +205,6 @@ mod tests {
         let heading_and_all = crate::widgets::table::ROW_HEIGHT * 2.0;
         let rows = (TOP_HEIGHT - heading_and_all) / crate::widgets::table::ROW_HEIGHT;
         assert!(rows >= 8.0, "only {rows} artist rows fit");
-    }
-
-    #[test]
-    fn the_artwork_is_what_sets_the_strip_height() {
-        // Not decoration filling leftover space: the artwork is square and the
-        // strip is sized around it (§7.1).
-        assert!(ARTWORK_SIZE <= TOP_HEIGHT);
-        assert!(ARTWORK_SIZE > TOP_HEIGHT * 0.9);
     }
 
     #[test]
