@@ -10,6 +10,7 @@
 
 use crate::keymap::{Action, Keymap};
 use crate::layouts::{self, Browser, BrowserPlacement};
+use crate::overlays::{self, Overlay};
 use crate::theme::Theme;
 use crate::widgets::{panes, table, transport};
 use iced::widget::{button, container, row, text, text_input};
@@ -40,6 +41,7 @@ const SEARCH_ID: &str = "search";
 const TABLE_ID: &str = "tracks";
 const ARTIST_PANE_ID: &str = "artists";
 const ALBUM_PANE_ID: &str = "albums";
+const QUEUE_ID: &str = "queue";
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -50,6 +52,8 @@ pub enum Message {
     ArtistPane(panes::Event),
     AlbumPane(panes::Event),
     ClearFilters,
+    Queue(table::Event),
+    CloseOverlay,
     SearchChanged(String),
     /// A key press, already resolved through the keymap.
     Action(Action),
@@ -97,6 +101,18 @@ pub struct App {
     scroll_offset: f32,
     viewport_height: f32,
     status: String,
+
+    /// Which overlay is open. One `Option`, so §9's "one at a time, never
+    /// stacked" cannot be expressed otherwise.
+    overlay: Option<Overlay>,
+    /// The playback snapshot, as the engine last reported it. This is what the
+    /// queue shows -- §6.2's `tracks`, not the current view.
+    queue: Option<scoria_core::PlaybackSource>,
+    queue_lines: Vec<table::Line>,
+    queue_scroll: f32,
+    /// The file's own tags, read when the properties overlay opens.
+    properties: Vec<(String, String)>,
+    properties_problem: Option<String>,
 }
 
 impl App {
@@ -147,6 +163,12 @@ impl App {
             scroll_offset: 0.0,
             viewport_height: 650.0,
             status,
+            overlay: None,
+            queue: None,
+            queue_lines: Vec::new(),
+            queue_scroll: 0.0,
+            properties: Vec::new(),
+            properties_problem: None,
         }
     }
 
@@ -241,6 +263,8 @@ impl App {
                 self.refresh();
             }
             Message::ClearFilters => self.clear_filters(),
+            Message::Queue(event) => return self.on_queue(event),
+            Message::CloseOverlay => self.overlay = None,
             Message::ArtistPane(event) => self.on_artist_pane(event),
             Message::AlbumPane(event) => self.on_album_pane(event),
             Message::Action(action) => return self.on_action(action),
@@ -278,6 +302,8 @@ impl App {
                 CoreEvent::QueueChanged(source) => {
                     self.shuffled = source.is_shuffled();
                     self.repeat = source.repeat();
+                    self.queue_lines = table::build_lines(source.len(), &[]);
+                    self.queue = Some(source);
                 }
                 CoreEvent::LibraryChanged(delta) => {
                     // The scan happened on another thread against its own
@@ -335,12 +361,38 @@ impl App {
             // The right-click menu arrives with the overlays at M9. §9.1 makes
             // "Show album art" the one escape hatch from artwork following
             // playback, so it belongs there rather than here.
-            table::Event::Context(index) => self.cursor = Some(index),
+            // §9.1's one escape hatch from artwork following playback: a
+            // right-click opens the overlay for *that* album, without turning
+            // into a follow-selection mode.
+            table::Event::Context(index) => {
+                self.cursor = Some(index);
+                let album = self
+                    .rows
+                    .get(index)
+                    .and_then(|id| self.track(*id))
+                    .map(|t| t.album_id);
+                self.overlay = Some(Overlay::Artwork(album));
+            }
             table::Event::Scrolled { offset, viewport } => {
                 self.scroll_offset = offset;
                 self.viewport_height = viewport;
             }
         }
+    }
+
+    /// The queue's own table events. §9.2: double-click sets `position`.
+    fn on_queue(&mut self, event: table::Event) -> Task<Message> {
+        match event {
+            table::Event::Activate(index) => self.send(Command::SetPosition(index)),
+            table::Event::Scrolled { offset, viewport } => {
+                self.queue_scroll = offset;
+                self.viewport_height = viewport;
+            }
+            // Selection in the queue *is* the position, so a single click
+            // marking a row would imply something it cannot do.
+            table::Event::Select(_) | table::Event::Context(_) => {}
+        }
+        Task::none()
     }
 
     fn on_artist_pane(&mut self, event: panes::Event) {
@@ -377,6 +429,61 @@ impl App {
                 }
             }
             panes::Event::Scrolled { offset, .. } => self.album_scroll = offset,
+        }
+    }
+
+    /// Opens, closes or replaces an overlay, and prepares whatever it needs.
+    fn open_overlay(&mut self, requested: Overlay) -> Task<Message> {
+        self.overlay = overlays::toggle(self.overlay, requested);
+
+        // Reading a file's tags is I/O, so it happens once on open rather than
+        // in the view, which runs every frame.
+        if let Some(Overlay::Properties(id)) = self.overlay {
+            self.load_properties(id);
+        }
+
+        // The queue opens showing where you are, which means scrolled to it.
+        // §9.2 asks for the current position marked *and* scrolled into view.
+        if self.overlay == Some(Overlay::Queue) {
+            let position = self
+                .queue
+                .as_ref()
+                .and_then(scoria_core::PlaybackSource::position);
+            if let Some(position) = position {
+                self.queue_scroll =
+                    table::centre_offset(position, self.queue_lines.len(), self.viewport_height);
+                return iced::widget::operation::scroll_to(
+                    iced::widget::Id::new(QUEUE_ID),
+                    iced::widget::scrollable::AbsoluteOffset {
+                        x: 0.0,
+                        y: self.queue_scroll,
+                    },
+                );
+            }
+        }
+        Task::none()
+    }
+
+    /// Reads the file's own tags for the properties overlay.
+    ///
+    /// Done on open rather than on render: it is file I/O, and a view function
+    /// that touched the disk would do it on every frame.
+    fn load_properties(&mut self, id: TrackId) {
+        self.properties.clear();
+        self.properties_problem = None;
+
+        let Some(session) = &self.session else { return };
+        let Some(track) = session.index().track(id) else {
+            return;
+        };
+        let Ok(root) = session.config().root() else {
+            self.properties_problem = Some("no library root is set".to_owned());
+            return;
+        };
+
+        match scoria_core::library::tags::read_all(&track.path.to_absolute(root)) {
+            Ok(tags) => self.properties = tags,
+            Err(e) => self.properties_problem = Some(format!("{e}")),
         }
     }
 
@@ -465,7 +572,12 @@ impl App {
                 Command::Seek(position)
             }
             // The artwork overlay arrives at M9.
-            transport::Event::ShowArtwork => return Task::none(),
+            // §9.1: the resting state is the thumbnail; clicking it opens the
+            // playing track's art full size.
+            transport::Event::ShowArtwork => {
+                self.overlay = overlays::toggle(self.overlay, Overlay::Artwork(None));
+                return Task::none();
+            }
         };
         self.send(command);
         Task::none()
@@ -516,9 +628,24 @@ impl App {
                 return iced::widget::operation::focus(iced::widget::Id::new(SEARCH_ID));
             }
             // Overlays arrive at M9.
-            // Overlays arrive at M9; until then Escape only has the one job.
-            Action::ToggleQueue | Action::ToggleHelp => {}
-            Action::Dismiss => self.clear_filters(),
+            Action::ToggleQueue => return self.open_overlay(Overlay::Queue),
+            Action::ShowProperties => {
+                if let Some(id) = self.cursor.and_then(|index| self.rows.get(index).copied()) {
+                    return self.open_overlay(Overlay::Properties(id));
+                }
+                self.status = "select a track first".to_owned();
+            }
+            // The keybinding cheatsheet is a §8 promise the overlays make
+            // possible; it arrives with the column work at M10.
+            Action::ToggleHelp => {}
+            Action::Dismiss => {
+                // §9: Escape closes the overlay. With none open it clears the
+                // filters instead -- one key backing out of whatever is
+                // currently narrowing the view.
+                if self.overlay.take().is_none() {
+                    self.clear_filters();
+                }
+            }
         }
         Task::none()
     }
@@ -758,14 +885,109 @@ impl App {
             artwork: self.artwork_view(),
         });
 
-        layouts::arrange(
+        let base = layouts::arrange(
             self.placement,
             table::view(table_view, Message::Table),
             transport::view(&transport_view, Message::Transport),
             search.into(),
             browser,
             &self.theme,
-        )
+        );
+
+        match self.overlay {
+            None => base,
+            Some(overlay) => overlays::present(
+                base,
+                overlay,
+                self.overlay_content(overlay),
+                &self.theme,
+                Message::CloseOverlay,
+            ),
+        }
+    }
+
+    fn overlay_content(&self, overlay: Overlay) -> Element<'_, Message, Theme> {
+        match overlay {
+            Overlay::Queue => overlays::queue::view(
+                overlays::queue::QueueView {
+                    lines: &self.queue_lines,
+                    rows: self.queue_rows(),
+                    position: self
+                        .queue
+                        .as_ref()
+                        .and_then(scoria_core::PlaybackSource::position),
+                    playing: self.playing,
+                    scroll_offset: self.queue_scroll,
+                    divergence: self.queue_divergence(),
+                    theme: &self.theme,
+                    id: QUEUE_ID,
+                },
+                Message::Queue,
+            ),
+            Overlay::Artwork(album) => {
+                // §9.1: normally what is playing. An album is only named when
+                // the right-click action named one.
+                let album = album.or_else(|| {
+                    self.playing
+                        .and_then(|id| self.track(id))
+                        .map(|t| t.album_id)
+                });
+                overlays::artwork::view(overlays::artwork::ArtworkView {
+                    image: album.and_then(|id| self.session.as_ref()?.artwork().get(id)),
+                    caption: album.and_then(|id| self.album_caption(id)),
+                    theme: &self.theme,
+                })
+            }
+            Overlay::Properties(id) => {
+                overlays::properties::view(overlays::properties::PropertiesView {
+                    summary: self.track(id).map(track_summary).unwrap_or_default(),
+                    tags: self.properties.clone(),
+                    problem: self.properties_problem.clone(),
+                    theme: &self.theme,
+                })
+            }
+        }
+    }
+
+    /// The snapshot's tracks, resolved through the index.
+    fn queue_rows(&self) -> Vec<&Track> {
+        let Some(queue) = &self.queue else {
+            return Vec::new();
+        };
+        let Some(session) = &self.session else {
+            return Vec::new();
+        };
+        session.index().rows(queue.tracks())
+    }
+
+    /// A caption naming the album some artwork belongs to.
+    fn album_caption(&self, album: scoria_core::AlbumId) -> Option<String> {
+        let track = self
+            .session
+            .as_ref()?
+            .index()
+            .tracks()
+            .iter()
+            .find(|t| t.album_id == album)?;
+        Some(format!("{} — {}", track.album_artist, track.album))
+    }
+
+    /// §9.2: a one-line explanation, *only* when the view and the snapshot
+    /// disagree.
+    ///
+    /// This is the question the queue exists to answer. §6.2 lets `tracks` and
+    /// `origin` diverge on purpose, and without saying so a Next button that
+    /// disagrees with the visible list reads as a bug.
+    fn queue_divergence(&self) -> Option<String> {
+        let queue = self.queue.as_ref()?;
+        if queue.tracks() == self.rows.as_slice() {
+            return None;
+        }
+        Some(format!(
+            "Playing a snapshot of {} track(s) taken from {}. The list you are browsing has changed since.",
+            queue.len(),
+            queue.origin().label(),
+        ))
     }
 
     /// The now-playing album's artwork, or a placeholder.
@@ -865,4 +1087,58 @@ fn describe(delta: &scoria_core::event::LibraryDelta, showing: usize) -> String 
         D::AvailabilityChanged(ids) => format!("{} track(s) went missing or came back", ids.len()),
         D::Invalidated => format!("library reloaded -- showing {showing}"),
     }
+}
+
+/// What the application knows about a track, for the properties dialog.
+///
+/// Deliberately separate from the file's own tags: this is the indexed view,
+/// including things the file does not say -- the resolved album id, whether the
+/// file still exists.
+fn track_summary(track: &Track) -> Vec<(&'static str, String)> {
+    let mut summary = vec![
+        ("Title", track.title.clone()),
+        ("Artist", track.artist.clone()),
+        ("Album artist", track.album_artist.clone()),
+        ("Album", track.album.clone()),
+    ];
+
+    if let Some(sort) = &track.album_artist_sort {
+        // §4.1: the structural value, which is what sorting and grouping used.
+        summary.push(("Album artist sort", sort.clone()));
+    }
+    if let Some(date) = track.date {
+        summary.push(("Date", date.to_string()));
+    }
+    if let Some(disc) = track.disc {
+        summary.push(("Disc", disc.to_string()));
+    }
+    if let Some(number) = track.track_number {
+        summary.push(("Track", number.to_string()));
+    }
+    summary.push(("Duration", crate::widgets::format_duration(track.duration)));
+    summary.push(("Path", track.path.to_string()));
+
+    let gain = track.replay_gain;
+    summary.push((
+        "ReplayGain",
+        if gain.is_tagged() {
+            format!(
+                "track {} dB, album {} dB",
+                gain.track_gain_db
+                    .map_or_else(|| "-".to_owned(), |g| format!("{g:.2}")),
+                gain.album_gain_db
+                    .map_or_else(|| "-".to_owned(), |g| format!("{g:.2}")),
+            )
+        } else {
+            // §6.7: untagged means unity, not silence, and saying so here saves
+            // the question being asked of the loudness later.
+            "not tagged (plays at 0 dB)".to_owned()
+        },
+    ));
+
+    if !track.available {
+        // §7.4: the row is kept and struck through, and this says why.
+        summary.push(("Availability", "file is missing".to_owned()));
+    }
+    summary
 }

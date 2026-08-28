@@ -292,6 +292,34 @@ impl Theme {
         }
     }
 
+    /// The frame an overlay sits in (§9).
+    #[must_use]
+    pub fn overlay_style(&self) -> container::Style {
+        container::Style {
+            background: Some(Background::Color(colour(self.roles.surface))),
+            text_color: Some(colour(self.roles.text)),
+            border: Border {
+                color: colour(self.roles.border),
+                width: 1.0,
+                radius: border::radius(4),
+            },
+            ..container::Style::default()
+        }
+    }
+
+    /// The dimming behind an overlay.
+    ///
+    /// Dark rather than merely translucent: the point is that the explorer is
+    /// not available, which §9.2 calls the whole reason the queue is modal.
+    #[must_use]
+    pub fn scrim_style(&self) -> container::Style {
+        let base = colour(self.roles.background);
+        container::Style {
+            background: Some(Background::Color(Color { a: 0.75, ..base })),
+            ..container::Style::default()
+        }
+    }
+
     /// The dismissible filter chip in the header.
     ///
     /// Reads as a thing you can act on rather than a label: bordered in the

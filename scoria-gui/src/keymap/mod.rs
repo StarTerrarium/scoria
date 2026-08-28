@@ -205,6 +205,7 @@ impl Keymap {
             Binding::new(T::Char('l'), Mods::CTRL, A::CycleLayout),
             Binding::new(T::Char('j'), Mods::CTRL, A::JumpToPlaying),
             Binding::new(T::Char('q'), Mods::CTRL, A::ToggleQueue),
+            Binding::new(T::Char('i'), Mods::CTRL, A::ShowProperties),
             // Overlays. §9: escape closes, and the key that opened it toggles.
             Binding::new(T::Escape, Mods::NONE, A::Dismiss),
             Binding::new(T::Char('?'), Mods::NONE, A::ToggleHelp),

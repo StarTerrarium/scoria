@@ -95,6 +95,52 @@ pub fn read(path: &Path) -> Result<TrackTags, CoreError> {
     })
 }
 
+/// Every tag in a file, as it is written there.
+///
+/// For the properties dialog (`DESIGN.md` §9.3): a complete dump, with no
+/// editorial layer. That means the format's own key names rather than ours, and
+/// every field including the ones nothing indexes -- the point is to show what
+/// is actually in the file.
+///
+/// Sorted by key, because a tag block's own order is an artefact of whichever
+/// tool wrote it last and carries no meaning.
+///
+/// # Errors
+///
+/// [`CoreError::CorruptData`] if the file cannot be parsed as audio.
+pub fn read_all(path: &Path) -> Result<Vec<(String, String)>, CoreError> {
+    let file = lofty::read_from_path(path)
+        .map_err(|e| CoreError::CorruptData(format!("{}: {e}", path.display())))?;
+
+    let Some(tag) = file.primary_tag().or_else(|| file.first_tag()) else {
+        return Ok(Vec::new());
+    };
+
+    let tag_type = tag.tag_type();
+    let mut items: Vec<(String, String)> = tag
+        .items()
+        .map(|item| {
+            let key = item
+                .key()
+                .map_key(tag_type)
+                .map_or_else(|| format!("{:?}", item.key()), ToOwned::to_owned);
+            let value = match item.value() {
+                lofty::tag::ItemValue::Text(text) | lofty::tag::ItemValue::Locator(text) => {
+                    text.clone()
+                }
+                // Binary values are things like fingerprints. Their length says
+                // more than their bytes would.
+                lofty::tag::ItemValue::Binary(bytes) => format!("<{} bytes>", bytes.len()),
+            };
+            (key, value)
+        })
+        .filter(|(_, value)| !value.trim().is_empty())
+        .collect();
+
+    items.sort();
+    Ok(items)
+}
+
 /// A trimmed, non-empty string, or nothing.
 ///
 /// Picard writes empty frames for fields it has no value for, so "present but

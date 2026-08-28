@@ -446,8 +446,9 @@ Tooltips only solve discovery for mouse users, and this is a keyboard-navigable 
 
 One family, one set of rules. Four overlays with three dismissal behaviours would be its own configuration burden.
 
-- One at a time, never stacked.
+- One at a time, never stacked. The state is a single `Option`, so two cannot be expressed.
 - Escape closes. The key that opened it toggles it. With no overlay open, Escape clears the filters instead (§7.2) -- one key backing out of whatever is currently narrowing the view, rather than two bindings competing for it.
+- **"The key that opened it" means the same request, not the same kind.** Asking for a second track's properties replaces what is showing rather than closing it: you asked to see something, and answering by showing nothing would be a strange reading of "toggle". An identical request closes; anything else replaces.
 - Anything wanting to be a second simultaneous overlay is a pane, and panes are banned.
 
 ### 9.1 Artwork
@@ -462,7 +463,11 @@ Escape hatch: right-clicking any track offers "Show album art", which opens the 
 
 Modal, on top of the explorer. Modality is the point: being able to see both at once would recreate the ambiguity the separation exists to remove.
 
-Uses the track table pointed at `tracks`. Shows the whole snapshot with the current position marked and scrolled into view, including already-played tracks. Double-click sets `position`.
+Uses the track table pointed at `tracks` -- the same widget, not a second one, which is invariant 3 doing its job. Shows the whole snapshot with the current position marked and scrolled into view, including already-played tracks. Double-click sets `position`.
+
+**No group headers.** The snapshot is a play order, and a header wherever the album changed would suggest the grouping means something. It does not: the order is the order (§6.2).
+
+Selection in the queue *is* the position, so a single click does nothing. Marking a row without moving there would imply the queue has a selection model of its own, and it does not.
 
 The queue view exists specifically because `tracks` and `origin` can diverge. Without it there is no authoritative answer to "what plays next", and a `Next` button that disagrees with the visible list reads as a bug.
 
@@ -471,6 +476,8 @@ When the origin filter's current contents differ from the snapshot, show a one-l
 ### 9.3 Properties
 
 Full metadata dump for a track, scrolling, modal. A complete dump has no editorial layer, so nothing about it needs to be adjacent to the table.
+
+Two sections: what the application knows -- including things the file does not say, like the resolved album identity and whether the file still exists -- and then every tag in the file under the format's own key names. The second is read when the dialog opens rather than when it draws, because it is file I/O and a view function runs every frame.
 
 Tag editing is post-1.0 and lands here. An editor needs a save/cancel boundary, which a docked pane that mutates on selection change has nowhere to put. Keeping tag writing behind a deliberate modal action also protects a carefully Picard-tagged library from accidental edits.
 
