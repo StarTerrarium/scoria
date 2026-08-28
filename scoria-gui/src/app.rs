@@ -120,12 +120,6 @@ pub struct App {
     /// stacked" cannot be expressed otherwise.
     /// What is on screen, including anything still retracting.
     overlay: Option<overlays::Presenting>,
-    /// The drawer's height, as a fraction of the space above the transport.
-    ///
-    /// A fraction, not pixels: a height chosen on one monitor is wrong on every
-    /// other. Kept per overlay kind, because a queue and a piece of album art
-    /// do not want the same amount of room.
-    drawer_fractions: std::collections::HashMap<&'static str, f32>,
     dragging_drawer: bool,
     /// The playback snapshot, as the engine last reported it. This is what the
     /// queue shows -- §6.2's `tracks`, not the current view.
@@ -199,7 +193,6 @@ impl App {
             viewport_height: 650.0,
             status,
             overlay: None,
-            drawer_fractions: std::collections::HashMap::new(),
             dragging_drawer: false,
             queue: None,
             queue_lines: Vec::new(),
@@ -307,11 +300,17 @@ impl App {
             Message::DrawerDragStart => self.dragging_drawer = true,
             Message::DrawerDragTo(fraction) => {
                 if let Some(state) = self.overlay {
-                    self.drawer_fractions
-                        .insert(state.overlay.title(), fraction);
+                    self.settings
+                        .drawer_heights
+                        .insert(state.overlay.title().to_owned(), fraction);
                 }
             }
-            Message::DrawerDragEnd => self.dragging_drawer = false,
+            Message::DrawerDragEnd => {
+                self.dragging_drawer = false;
+                // On release rather than during: a drag is hundreds of pointer
+                // events and one outcome.
+                self.persist();
+            }
             Message::Queue(event) => return self.on_queue(event),
             Message::CloseOverlay => self.set_overlay(None),
             Message::ArtistPane(event) => self.on_artist_pane(event),
@@ -640,7 +639,8 @@ impl App {
     ///
     /// Whatever it was last dragged to, or the design's default for that kind.
     fn drawer_fraction(&self, overlay: Overlay) -> f32 {
-        self.drawer_fractions
+        self.settings
+            .drawer_heights
             .get(overlay.title())
             .copied()
             .unwrap_or_else(|| overlay.default_fraction())
