@@ -335,6 +335,12 @@ A track with no gain tags plays at 0 dB. Never estimate, never substitute a neig
 
 This is worth stating plainly: the feature is only as good as the library's tag coverage, and a partially tagged library will have audible steps between normalised and un-normalised tracks. The fix is tagging the library, not heuristics in the player.
 
+**Requested, not yet designed: an on/off toggle, and something for untagged tracks.**
+
+The toggle is a fair ask and is a different question from the one §6.7 settles. What is "derived, not configured" here is *which* gain applies -- album or track -- and that stays derived, because the answer follows from how playback is ordered and there is nothing for a user to decide. Whether to apply gain at all is a preference: some people want every record at the same loudness, others want the mastering left alone.
+
+Levelling tracks the tags say nothing about is the harder half and needs a decision this document does not yet make. Computing gain by analysing audio is explicitly out (§6.7); that is `rsgain`'s job. A real-time normaliser is a different thing again -- it would work on untagged material, but it changes dynamics rather than just offsetting level, and doing it well is a project in itself. Neither belongs in 1.0.
+
 ---
 
 ## 7. The library view
@@ -531,7 +537,7 @@ Single-root library with watching and rescan. Picard-tagged FLAC as first-class,
 
 ### Post-1.0
 
-Saved playlists. Vim keymap. Tag editing in the properties dialog. Playback Mode. MP3 gapless (LAME/Info delay and padding). User-supplied themes. Custom sort chains beyond presets. Resume-on-restart -- §6.2 cites it as a *reason* the snapshot is materialised, and that argument holds whether or not the feature ships. Computing ReplayGain by analysing audio.
+Saved playlists. Vim keymap. Tag editing in the properties dialog. Playback Mode. MP3 gapless (LAME/Info delay and padding). User-supplied themes. Custom sort chains beyond presets. A ReplayGain on/off toggle, and some answer for tracks the tags say nothing about (§6.7). Resume-on-restart -- §6.2 cites it as a *reason* the snapshot is materialised, and that argument holds whether or not the feature ships. Computing ReplayGain by analysing audio.
 
 ### Never
 
