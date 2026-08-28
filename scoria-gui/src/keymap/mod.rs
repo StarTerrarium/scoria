@@ -206,6 +206,8 @@ impl Keymap {
             Binding::new(T::Char('j'), Mods::CTRL, A::JumpToPlaying),
             Binding::new(T::Char('q'), Mods::CTRL, A::ToggleQueue),
             Binding::new(T::Char('i'), Mods::CTRL, A::ShowProperties),
+            // Where applications put their settings.
+            Binding::new(T::Char(','), Mods::CTRL, A::ToggleColumns),
             // Overlays. §9: escape closes, and the key that opened it toggles.
             Binding::new(T::Escape, Mods::NONE, A::Dismiss),
             Binding::new(T::Char('?'), Mods::NONE, A::ToggleHelp),

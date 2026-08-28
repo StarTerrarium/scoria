@@ -52,6 +52,8 @@ pub enum Action {
 
     // Overlays (§9). One at a time, escape closes, the opening key toggles.
     ToggleQueue,
+    /// Column visibility, order and the sort presets (§7.3).
+    ToggleColumns,
     /// A metadata dump for the selected track (§9.3).
     ShowProperties,
     ToggleHelp,
@@ -71,7 +73,7 @@ pub enum Action {
 impl Action {
     /// Every action, so a keymap can be checked for gaps.
     #[must_use]
-    pub const fn all() -> [Self; 22] {
+    pub const fn all() -> [Self; 23] {
         [
             Self::MoveUp,
             Self::MoveDown,
@@ -92,6 +94,7 @@ impl Action {
             Self::CycleLayout,
             Self::FocusSearch,
             Self::ToggleQueue,
+            Self::ToggleColumns,
             Self::ShowProperties,
             Self::ToggleHelp,
             Self::Dismiss,
@@ -121,6 +124,7 @@ impl Action {
             Self::CycleLayout => "Cycle the browser placement",
             Self::FocusSearch => "Search",
             Self::ToggleQueue => "Show the queue",
+            Self::ToggleColumns => "Columns and sorting",
             Self::ShowProperties => "Show track metadata",
             Self::ToggleHelp => "Show this list",
             Self::Dismiss => "Close, or clear the filters",

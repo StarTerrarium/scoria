@@ -58,6 +58,7 @@ pub enum Message {
     DrawerDragTo(f32),
     DrawerDragEnd,
     Queue(table::Event),
+    Columns(overlays::columns::Event),
     CloseOverlay,
     SearchChanged(String),
     /// A key press, already resolved through the keymap.
@@ -312,6 +313,7 @@ impl App {
                 self.persist();
             }
             Message::Queue(event) => return self.on_queue(event),
+            Message::Columns(event) => self.on_columns(event),
             Message::CloseOverlay => self.set_overlay(None),
             Message::ArtistPane(event) => self.on_artist_pane(event),
             Message::AlbumPane(event) => self.on_album_pane(event),
@@ -426,8 +428,10 @@ impl App {
                 self.viewport_height = viewport;
             }
             table::Event::SortBy(column) => self.sort_by(column),
-            // The column menu arrives with the rest of §7.3's header actions.
-            table::Event::HeadingMenu => {}
+            // §7.3: configured from a right-click on the header.
+            table::Event::HeadingMenu => {
+                self.set_overlay(overlays::toggle(self.open_overlay_kind(), Overlay::Columns));
+            }
             table::Event::ResizeStart(index) => self.resizing_column = Some(index),
             table::Event::ResizeTo(fraction) => {
                 if let Some(index) = self.resizing_column {
@@ -438,6 +442,33 @@ impl App {
                 self.resizing_column = None;
                 // Saved on release rather than on every pointer move: a drag is
                 // hundreds of events and one outcome.
+                self.persist();
+            }
+        }
+    }
+
+    /// Column visibility, order, and the sort preset (§7.3).
+    fn on_columns(&mut self, event: overlays::columns::Event) {
+        use overlays::columns::Event as E;
+        match event {
+            E::ChooseSort(preset) => {
+                self.settings.sort = preset;
+                // Choosing a preset clears the transient override, or a heading
+                // would keep quietly winning over the thing just picked.
+                self.sort_override = None;
+                self.persist();
+                self.apply_sort();
+            }
+            E::ClearOverride => {
+                self.sort_override = None;
+                self.apply_sort();
+            }
+            E::ToggleColumn(column) => {
+                self.settings.columns.toggle(column);
+                self.persist();
+            }
+            E::MoveColumn(column, delta) => {
+                self.settings.columns.reorder(column, isize::from(delta));
                 self.persist();
             }
         }
@@ -858,6 +889,7 @@ impl App {
             }
             // Overlays arrive at M9.
             Action::ToggleQueue => return self.open_overlay(Overlay::Queue),
+            Action::ToggleColumns => return self.open_overlay(Overlay::Columns),
             Action::ShowProperties => {
                 if let Some(id) = self.cursor.and_then(|index| self.rows.get(index).copied()) {
                     return self.open_overlay(Overlay::Properties(id));
@@ -1153,6 +1185,15 @@ impl App {
 
     fn overlay_content(&self, overlay: Overlay) -> Element<'_, Message, Theme> {
         match overlay {
+            Overlay::Columns => overlays::columns::view(
+                overlays::columns::ColumnsView {
+                    layout: &self.settings.columns,
+                    sort: self.settings.sort,
+                    overridden: self.sort_override.is_some(),
+                    theme: &self.theme,
+                },
+                Message::Columns,
+            ),
             Overlay::Queue => overlays::queue::view(
                 overlays::queue::QueueView {
                     columns: &self.settings.columns,

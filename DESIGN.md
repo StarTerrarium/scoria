@@ -394,7 +394,11 @@ Search is not part of that summary. It has its own field in every placement and 
 
 One component, used by every layout and by the queue overlay. If it needs a second implementation, something has gone wrong.
 
-**Columns** support show/hide, reorder, and resize, from a right-click on the header. This is configuration that tunes a good default: bounded, discoverable, and ignorable. What is banned is an edit mode that lets the application be assembled -- see §2 and `CLAUDE.md` invariant 4 for where that line falls.
+**Columns** support show/hide, reorder, and resize, from a right-click on the header. Resizing happens on the header itself by dragging an edge; visibility, order and the sort presets live in a panel the right-click opens.
+
+That panel is one of §9's drawers rather than a floating context menu. §9 is explicit that there is one family of overlays with one set of rules, and a popup would be a second presentation with its own dismissal behaviour -- the configuration burden §9 exists to avoid. A titled panel listing every column, with the hidden ones visible and restorable, is also easier to find your way around than a menu that only appears if you already knew to right-click.
+
+The last visible column cannot be hidden: a table with no columns shows nothing and offers no way back, because the header it is configured from would be empty too. This is configuration that tunes a good default: bounded, discoverable, and ignorable. What is banned is an edit mode that lets the application be assembled -- see §2 and `CLAUDE.md` invariant 4 for where that line falls.
 
 **Widths are weights, not pixels.** A column sized on one monitor is wrong on the next, exactly as a fixed drawer height was. Dragging an edge takes width from the column to its right rather than reflowing everything, so the columns beyond the one being dragged stay where they are. No column can be dragged away to nothing, because a column with no width cannot be grabbed again.
 
