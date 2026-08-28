@@ -18,7 +18,7 @@ pub mod properties;
 pub mod queue;
 
 use crate::theme::Theme;
-use iced::widget::{column, container, mouse_area, opaque, row, text};
+use iced::widget::{Space, column, container, mouse_area, opaque, responsive, row, stack, text};
 use iced::{Element, Fill, Length};
 use scoria_core::id::{AlbumId, TrackId};
 use std::time::{Duration, Instant};
@@ -39,22 +39,54 @@ pub enum Overlay {
 }
 
 impl Overlay {
-    /// How tall the drawer should be, in pixels.
+    /// How tall the drawer opens, as a fraction of the space above the
+    /// transport bar.
     ///
-    /// Capped rather than proportional. A panel that grows with the window ends
-    /// up covering it, and something covering the screen is not read as an
-    /// overlay whatever it is called.
+    /// A fraction rather than pixels. A fixed height is wrong on every display
+    /// it was not chosen on: 560px is over half of a 1080p window and a stamp
+    /// on a 4K one. Proportions are the only thing that travels.
     #[must_use]
-    pub const fn max_height(self) -> f32 {
+    pub const fn default_fraction(self) -> f32 {
         match self {
-            Self::Queue => 560.0,
+            Self::Queue => 0.55,
             // Album art is square and exists to be looked at: the one place
             // §2's "dense over pretty" gives way.
-            Self::Artwork(_) => 640.0,
-            Self::Properties(_) => 560.0,
+            Self::Artwork(_) => 0.75,
+            Self::Properties(_) => 0.60,
         }
     }
+}
 
+/// How small the drawer can be dragged before it stops being useful.
+pub const MIN_FRACTION: f32 = 0.15;
+
+/// How large it can be dragged.
+///
+/// Short of the whole space on purpose: some of the library has to stay visible
+/// or the drawer stops reading as a layer over it.
+pub const MAX_FRACTION: f32 = 0.92;
+
+/// Everything needed to draw an overlay.
+///
+/// A struct rather than a long argument list, because half of these arrived one
+/// at a time and the call site had become unreadable.
+pub struct Presentation<'a, Message> {
+    pub overlay: Overlay,
+    pub content: Element<'a, Message, Theme>,
+    pub theme: &'a Theme,
+    /// How much of the drawer is showing, 0 to 1. The animation.
+    pub shown: f32,
+    /// Its height as a fraction of the space available. What the user set.
+    pub fraction: f32,
+    /// Whether the resize handle is currently being dragged.
+    pub dragging: bool,
+    pub on_close: Message,
+    pub on_drag_start: Message,
+    pub on_drag_to: fn(f32) -> Message,
+    pub on_drag_end: Message,
+}
+
+impl Overlay {
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
@@ -178,6 +210,18 @@ pub fn progress(since: Instant, now: Instant) -> f32 {
     1.0 - (1.0 - linear).powi(3)
 }
 
+/// Splits a fraction into the two `FillPortion` weights that express it.
+///
+/// Proportions rather than measured pixels: iced can already divide space by
+/// weight, so the drawer does not need to know how tall the window is, and the
+/// result is right on any display. Out of a thousand, which is finer than any
+/// screen can show.
+#[must_use]
+pub fn portions(visible: f32) -> (u16, u16) {
+    let drawer = (visible.clamp(0.0, 1.0) * 1000.0).round() as u16;
+    (1000_u16.saturating_sub(drawer).max(1), drawer.max(1))
+}
+
 /// Builds the drawer and the dimming behind it, as one layer.
 ///
 /// Returns the layer rather than a finished view: where it goes is the layout's
@@ -186,25 +230,51 @@ pub fn progress(since: Instant, now: Instant) -> f32 {
 /// **The transport bar is never covered.** §9.2's modality is about not seeing
 /// the browse list and the play order at once, and the transport is neither --
 /// it is the thing the queue is *about*, so hiding it would remove the ability
-/// to pause or skip while reading the queue and gain nothing.
-///
-/// The drawer rises from the bottom edge, which is where the transport is, so
-/// it reads as belonging to it.
+/// to pause or skip while reading the queue and gain nothing at all.
 #[must_use]
 pub fn present<'a, Message: Clone + 'a>(
-    overlay: Overlay,
-    content: Element<'a, Message, Theme>,
-    theme: &Theme,
-    progress: f32,
-    on_close: Message,
+    presentation: Presentation<'a, Message>,
 ) -> Element<'a, Message, Theme> {
-    let progress = progress.clamp(0.0, 1.0);
+    let Presentation {
+        overlay,
+        content,
+        theme,
+        shown,
+        fraction,
+        dragging,
+        on_close,
+        on_drag_start,
+        on_drag_to,
+        on_drag_end,
+    } = presentation;
+
+    let shown = shown.clamp(0.0, 1.0);
+    let fraction = fraction.clamp(MIN_FRACTION, MAX_FRACTION);
     let frame_style = theme.overlay_style();
     let muted = theme.text_style(theme.muted_colour());
+    let grip_style = theme.grip_style();
+
+    // A grabber, the way a sheet has one. A draggable edge that does not look
+    // draggable is one nobody finds.
+    let grip = mouse_area(
+        container(
+            container(
+                Space::new()
+                    .width(Length::Fixed(52.0))
+                    .height(Length::Fixed(4.0)),
+            )
+            .style(move |_t: &Theme| grip_style),
+        )
+        .width(Fill)
+        .height(Length::Fixed(16.0))
+        .align_x(iced::Alignment::Center)
+        .align_y(iced::Alignment::Center),
+    )
+    .interaction(iced::mouse::Interaction::ResizingVertically)
+    .on_press(on_drag_start);
 
     // Deliberately generous. A heading small enough to be efficient would not
-    // announce that anything had opened, which is the whole problem this is
-    // solving.
+    // announce that anything had opened, which is the problem this solves.
     let header = row![
         text(overlay.title()).size(24),
         container(text("Esc to close").size(11).style(move |_t: &Theme| muted))
@@ -214,26 +284,65 @@ pub fn present<'a, Message: Clone + 'a>(
     .spacing(12)
     .align_y(iced::Alignment::Center);
 
-    // Height carries the animation: the drawer rises rather than fading in.
-    let drawer = container(column![header, content].spacing(12))
-        .padding([14, 18])
+    let (above, drawer_weight) = portions(fraction * shown);
+    let drawer = container(column![grip, header, content].spacing(8))
+        .padding(iced::Padding {
+            top: 0.0,
+            right: 18.0,
+            bottom: 14.0,
+            left: 18.0,
+        })
         .width(Fill)
-        .height(Length::Fixed(overlay.max_height() * progress))
+        .height(Length::FillPortion(drawer_weight))
+        .clip(true)
         .style(move |_t: &Theme| frame_style);
 
-    // Clicks inside the drawer belong to it, not to the scrim behind.
-    let drawer = opaque(mouse_area(drawer));
-
-    let scrim_style = theme.scrim_style(progress);
-    mouse_area(
-        container(drawer)
+    let scrim_style = theme.scrim_style(shown);
+    let layer = mouse_area(
+        container(
+            column![
+                Space::new().height(Length::FillPortion(above)),
+                opaque(drawer)
+            ]
             .width(Fill)
-            .height(Fill)
-            .align_y(iced::Bottom)
-            .style(move |_t: &Theme| scrim_style),
+            .height(Fill),
+        )
+        .width(Fill)
+        .height(Fill)
+        .style(move |_t: &Theme| scrim_style),
     )
-    .on_press(on_close)
-    .into()
+    .on_press(on_close);
+
+    if !dragging {
+        return opaque(layer);
+    }
+
+    // While dragging, a transparent sheet over everything follows the pointer
+    // wherever it goes. Without it the drag would stop the moment the cursor
+    // left the handle, which for something sixteen pixels tall is at once.
+    let catcher = responsive(move |size| {
+        let release = on_drag_end.clone();
+        mouse_area(Space::new().width(Fill).height(Fill))
+            .interaction(iced::mouse::Interaction::ResizingVertically)
+            .on_move(move |point| {
+                // `on_move` reports a position within this widget, and this
+                // widget is the whole explorer, so the fraction falls out of it.
+                let from_bottom = (size.height - point.y).max(0.0);
+                let fraction = if size.height > 0.0 {
+                    from_bottom / size.height
+                } else {
+                    fraction
+                };
+                on_drag_to(fraction.clamp(MIN_FRACTION, MAX_FRACTION))
+            })
+            .on_release(release)
+            .into()
+    });
+
+    stack![opaque(layer), opaque(catcher)]
+        .width(Fill)
+        .height(Fill)
+        .into()
 }
 
 #[cfg(test)]
@@ -337,11 +446,27 @@ mod tests {
             Overlay::Artwork(None),
             Overlay::Properties(TrackId(1)),
         ] {
-            assert!(
-                overlay.max_height() <= 660.0,
-                "{overlay:?} is {} tall",
-                overlay.max_height()
-            );
+            let fraction = overlay.default_fraction();
+            assert!(fraction <= MAX_FRACTION, "{overlay:?} opens at {fraction}");
+            assert!(fraction >= MIN_FRACTION, "{overlay:?} opens at {fraction}");
+        }
+    }
+
+    #[test]
+    fn a_fraction_becomes_the_weights_that_express_it() {
+        // Proportions rather than pixels: the same fraction has to mean the
+        // same share of a 1080p window and a 4K one.
+        let (above, drawer) = portions(0.25);
+        let share = f32::from(drawer) / f32::from(above + drawer);
+        assert!((share - 0.25).abs() < 0.01, "0.25 became {share}");
+    }
+
+    #[test]
+    fn the_weights_are_never_zero() {
+        // A zero-weight fill is a degenerate layout rather than an empty one.
+        for visible in [0.0, 1.0, -1.0, 2.0] {
+            let (above, drawer) = portions(visible);
+            assert!(above >= 1 && drawer >= 1, "{visible} gave {above}/{drawer}");
         }
     }
 

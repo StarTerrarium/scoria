@@ -347,6 +347,21 @@ impl Theme {
         }
     }
 
+    /// The drag handle at the top of a drawer.
+    #[must_use]
+    pub fn grip_style(&self) -> container::Style {
+        container::Style {
+            background: Some(Background::Color(colour(
+                self.roles.background.mix(self.roles.text, 0.35),
+            ))),
+            border: Border {
+                radius: border::radius(2),
+                ..Border::default()
+            },
+            ..container::Style::default()
+        }
+    }
+
     /// The dismissible filter chip in the header.
     ///
     /// Reads as a thing you can act on rather than a label: bordered in the

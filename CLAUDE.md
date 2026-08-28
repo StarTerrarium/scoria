@@ -28,7 +28,15 @@ Three layouts exist and differ only by `BrowserPlacement { Off, Top, Left }`. Th
 
 ### 4. No user-arranged layouts, ever
 
-No dockable panes, no splitters the user drags, no layout config files, no plugin system. Do not add these even if asked in a way that sounds reasonable. Column show/hide/reorder/resize is allowed and is the only exception.
+**The line is structure, not proportion.**
+
+Banned: anything that lets the user decide *what components exist and where they go*. No edit mode. No adding a pane and choosing what goes in it. No moving the browser from the left to the right by dragging it. No dockable panes, no plugin system, no layout files describing an assembled application. Do not add these even if asked in a way that sounds reasonable -- that is how they arrive.
+
+Allowed: adjusting *how big an existing thing is*. Column widths, the drawer's height, the browser's share of the window. These do not let the user construct anything; they let the user fit what already exists to the screen they actually have.
+
+The earlier version of this rule banned "splitters the user drags" and permitted "column resize" in the same breath, which is a contradiction -- resizing a column *is* dragging a divider. The structure/proportion line is what makes both halves consistent, and it is the line the reasoning in `DESIGN.md` §2 was always drawing.
+
+**Sizes are proportions, never pixels.** A height chosen on one monitor is wrong on every other: 560px is over half a 1080p window and a stamp on a 4K one. Store fractions and let the layout divide the space.
 
 ### 5. `origin` never drives playback
 

@@ -52,6 +52,9 @@ pub enum Message {
     ArtistPane(panes::Event),
     AlbumPane(panes::Event),
     ClearFilters,
+    DrawerDragStart,
+    DrawerDragTo(f32),
+    DrawerDragEnd,
     Queue(table::Event),
     CloseOverlay,
     SearchChanged(String),
@@ -106,6 +109,13 @@ pub struct App {
     /// stacked" cannot be expressed otherwise.
     /// What is on screen, including anything still retracting.
     overlay: Option<overlays::Presenting>,
+    /// The drawer's height, as a fraction of the space above the transport.
+    ///
+    /// A fraction, not pixels: a height chosen on one monitor is wrong on every
+    /// other. Kept per overlay kind, because a queue and a piece of album art
+    /// do not want the same amount of room.
+    drawer_fractions: std::collections::HashMap<&'static str, f32>,
+    dragging_drawer: bool,
     /// The playback snapshot, as the engine last reported it. This is what the
     /// queue shows -- §6.2's `tracks`, not the current view.
     queue: Option<scoria_core::PlaybackSource>,
@@ -165,6 +175,8 @@ impl App {
             viewport_height: 650.0,
             status,
             overlay: None,
+            drawer_fractions: std::collections::HashMap::new(),
+            dragging_drawer: false,
             queue: None,
             queue_lines: Vec::new(),
             queue_scroll: 0.0,
@@ -267,6 +279,14 @@ impl App {
                 self.refresh();
             }
             Message::ClearFilters => self.clear_filters(),
+            Message::DrawerDragStart => self.dragging_drawer = true,
+            Message::DrawerDragTo(fraction) => {
+                if let Some(state) = self.overlay {
+                    self.drawer_fractions
+                        .insert(state.overlay.title(), fraction);
+                }
+            }
+            Message::DrawerDragEnd => self.dragging_drawer = false,
             Message::Queue(event) => return self.on_queue(event),
             Message::CloseOverlay => self.set_overlay(None),
             Message::ArtistPane(event) => self.on_artist_pane(event),
@@ -486,6 +506,16 @@ impl App {
                 self.overlay = Some(overlays::Presenting::opening(overlay, now));
             }
         }
+    }
+
+    /// How tall this kind of drawer should be, as a fraction.
+    ///
+    /// Whatever it was last dragged to, or the design's default for that kind.
+    fn drawer_fraction(&self, overlay: Overlay) -> f32 {
+        self.drawer_fractions
+            .get(overlay.title())
+            .copied()
+            .unwrap_or_else(|| overlay.default_fraction())
     }
 
     /// What is open, ignoring anything on its way out.
@@ -941,13 +971,18 @@ impl App {
         // Drawn while retracting too, which is what makes closing an animation
         // rather than a disappearance.
         let overlay = self.overlay.map(|state| {
-            overlays::present(
-                state.overlay,
-                self.overlay_content(state.overlay),
-                &self.theme,
-                self.overlay_progress(),
-                Message::CloseOverlay,
-            )
+            overlays::present(overlays::Presentation {
+                overlay: state.overlay,
+                content: self.overlay_content(state.overlay),
+                theme: &self.theme,
+                shown: self.overlay_progress(),
+                fraction: self.drawer_fraction(state.overlay),
+                dragging: self.dragging_drawer,
+                on_close: Message::CloseOverlay,
+                on_drag_start: Message::DrawerDragStart,
+                on_drag_to: Message::DrawerDragTo,
+                on_drag_end: Message::DrawerDragEnd,
+            })
         });
 
         layouts::arrange(
