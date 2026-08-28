@@ -130,13 +130,21 @@ Behind a trait from day one:
 pub trait AudioBackend: Send {
     fn play(&mut self, track: &TrackRef) -> Result<()>;
     fn preload_next(&mut self, track: &TrackRef) -> Result<()>;
+    fn clear_preload(&mut self);
     fn pause(&mut self);
     fn resume(&mut self);
+    fn stop(&mut self);
     fn seek(&mut self, pos: Duration) -> Result<()>;
-    fn set_gain(&mut self, db: f32);
+    fn set_gain(&mut self, db: f32);      // per-track ReplayGain, in dB
+    fn set_volume(&mut self, linear: f32); // what the user set
     fn position(&self) -> Duration;
+    fn finished(&self) -> bool;
 }
 ```
+
+`set_gain` and `set_volume` are separate because they answer different questions: one is a correction the tags asked for and changes per track, the other is what the user set and does not. A backend with native ReplayGain support can honour both. `finished` exists because the engine polls rather than taking a callback -- a callback would run on the backend's own thread, and then two threads would own the snapshot.
+
+**Shuffle and repeat belong to the player, not to a snapshot.** They live on `PlaybackSource` because that is where `advance` needs them, but the engine keeps the preference and stamps it onto each new snapshot. Clicking a different track must not silently turn shuffle off, any more than it should reset the volume.
 
 Default implementation is rodio on Symphonia. The trait costs almost nothing and buys the option to swap in libmpv if pure-Rust gapless on an awkward format becomes a multi-week problem.
 
