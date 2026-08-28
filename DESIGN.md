@@ -148,7 +148,18 @@ pub trait AudioBackend: Send {
 
 Default implementation is rodio on Symphonia. The trait costs almost nothing and buys the option to swap in libmpv if pure-Rust gapless on an awkward format becomes a multi-week problem.
 
-**Gapless is not optional.** `preload_next` exists because appending to a rodio `Sink` is queueing, not gapless. The next track's decoder must be initialised and its first packets decoded before the current track's tail drains. FLAC, Vorbis and Opus carry exact sample counts and are straightforward. MP3 requires reading LAME/Info encoder delay and padding and trimming accordingly; that is post-1.0 work (§10).
+**Gapless is not optional.** `preload_next` exists because the next track's decoder must be initialised before the current track's tail drains. FLAC, Vorbis and Opus carry exact sample counts and are straightforward. MP3 requires reading LAME/Info encoder delay and padding and trimming accordingly; that is post-1.0 work (§10).
+
+In rodio 0.22 the queue moves between sources at a span boundary and pads only enough to complete a frame -- at most `channels - 1` samples. So queueing the next source ahead of time *is* gapless. The gap in a naive player comes from tearing down the output and constructing a decoder at the boundary, which is what `play` does and `preload_next` avoids.
+
+Two consequences follow, and both shape the trait:
+
+- **Gain travels with the track, not with the backend.** rodio's player volume applies to every queued source, so a per-track ReplayGain correction cannot be backend state once two tracks are in flight. `play` and `preload_next` take the gain as an argument; `set_volume` remains, because user volume genuinely does apply to everything.
+- **A preload has to be retractable.** rodio cannot un-append, and clearing skips the current track too. A queued source that yields no samples is skipped instantly, so cancelling is a matter of making it end early. Without that, changing shuffle in the last few seconds of a track would play whatever had already been queued.
+
+**The backend advances itself, so the engine follows rather than drives.** There is no moment where nothing is playing for the engine to notice, so it asks the backend what is being heard and brings the snapshot into step. If the two disagree -- a preload retracted too late to take effect -- the snapshot wins and the engine restarts from it, accepting a gap in exchange for playing the right thing.
+
+**The gain mode changes only at a track boundary.** Toggling shuffle changes which gain applies (§6.7), but the current track keeps the one it started with: restarting a song to correct a fraction of a decibel is a far worse trade than a slightly wrong gain for the remainder of it.
 
 ---
 

@@ -277,7 +277,14 @@ impl Engine {
                 self.invalidate_preload();
                 // Gain mode depends on shuffle (§6.7), so the current track's
                 // correction may have changed even though the track has not.
-                self.apply_gain_for_current();
+                // The gain mode depends on shuffle (§6.7), and gain now rides
+                // on the source rather than being a backend setting, so the
+                // current track's correction cannot be changed in place. It
+                // keeps the gain it started with, and the new mode applies from
+                // the next track on. Restarting the track to correct a fraction
+                // of a decibel would interrupt what the user is listening to,
+                // which is a far worse trade than a slightly wrong gain for the
+                // remainder of one song.
                 self.emit(Event::QueueChanged(self.source.clone()));
             }
             EngineCommand::SetRepeat(repeat) => {
@@ -300,9 +307,19 @@ impl Engine {
             return;
         }
 
-        if self.backend.finished() {
-            self.advance(SkipReason::TrackEnded);
-            return;
+        // With gapless, the backend moves into the queued track by itself:
+        // there is no moment where nothing is playing for the engine to notice.
+        // So the engine follows what is actually being heard rather than
+        // deciding it, and only takes over once the backend has run out.
+        match self.backend.current() {
+            None => {
+                self.advance(SkipReason::TrackEnded);
+                return;
+            }
+            Some(playing) if Some(playing) != self.source.current() => {
+                self.follow_backend(playing);
+            }
+            Some(_) => {}
         }
 
         let position = self.backend.position();
@@ -317,6 +334,31 @@ impl Engine {
         self.maybe_preload(position);
     }
 
+    /// Brings the snapshot into step with a gapless transition the backend
+    /// made without being told to.
+    ///
+    /// The queued track is by construction `peek_next`, so advancing once
+    /// should land on it. If it does not -- because a preload was retracted too
+    /// late to take effect -- the snapshot is authoritative and the engine
+    /// restarts from it, accepting a gap in exchange for playing the right
+    /// thing.
+    fn follow_backend(&mut self, playing: TrackId) {
+        self.preloaded = false;
+        self.source.advance();
+
+        if self.source.current() == Some(playing) {
+            self.last_reported_position = Duration::MAX;
+            if let Some(position) = self.source.position() {
+                self.emit(Event::TrackChanged {
+                    track: playing,
+                    position,
+                });
+            }
+        } else {
+            self.start_current();
+        }
+    }
+
     /// Hands the following track to the backend as the current one nears its
     /// end (§3.4).
     fn maybe_preload(&mut self, position: Duration) {
@@ -327,6 +369,11 @@ impl Engine {
             return;
         };
         if current.duration.saturating_sub(position) > PRELOAD_LEAD {
+            return;
+        }
+        // Repeat-one replays the same source rather than flowing into another,
+        // so there is nothing to prepare.
+        if self.source.repeat() == RepeatMode::One {
             return;
         }
         let Some(next) = self.source.peek_next() else {
@@ -340,7 +387,8 @@ impl Engine {
         // again on advance, and that attempt will report properly. Failing
         // loudly here would put an error in front of the user for a file that
         // then plays fine.
-        if self.backend.preload_next(&next).is_ok() {
+        let gain = self.gain_for(&next);
+        if self.backend.preload_next(&next, gain).is_ok() {
             self.preloaded = true;
         }
     }
@@ -387,8 +435,8 @@ impl Engine {
 
             match self.resolver.resolve(id) {
                 Some(track) => {
-                    self.apply_gain(&track);
-                    match self.backend.play(&track) {
+                    let gain = self.gain_for(&track);
+                    match self.backend.play(&track, gain) {
                         Ok(()) => {
                             self.preloaded = false;
                             self.last_reported_position = Duration::MAX;
@@ -420,19 +468,13 @@ impl Engine {
 
     /// §6.7: album gain when playing in album order, track gain when shuffled.
     /// Derived from how playback is ordered, never configured.
-    fn apply_gain(&mut self, track: &TrackRef) {
+    fn gain_for(&self, track: &TrackRef) -> f32 {
         let mode = if self.source.is_shuffled() {
             GainMode::Track
         } else {
             GainMode::Album
         };
-        self.backend.set_gain(track.replay_gain.gain_db(mode));
-    }
-
-    fn apply_gain_for_current(&mut self) {
-        if let Some(track) = self.current_ref() {
-            self.apply_gain(&track);
-        }
+        track.replay_gain.gain_db(mode)
     }
 
     fn current_ref(&self) -> Option<TrackRef> {

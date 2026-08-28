@@ -134,14 +134,38 @@ impl Rig {
         self.until(&format!("played {ids:?}"), |c| c.played() == expected);
     }
 
-    /// Ends the current track and waits for the engine to react.
+    /// Ends the current track and waits for the engine to notice.
     fn finish_and_settle(&self) {
         let before = self.control.calls().len();
+        let was_playing = self.control.now_playing();
         self.control.finish_track();
+
         let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline && self.control.calls().len() == before {
+        while Instant::now() < deadline {
+            // Either the engine acted, or the backend flowed into a queued
+            // track by itself and the engine has caught up with it.
+            if self.control.calls().len() != before
+                || (self.control.now_playing().is_some()
+                    && self.control.now_playing() != was_playing)
+            {
+                std::thread::sleep(Duration::from_millis(120));
+                return;
+            }
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// Every track the backend actually rendered, whether the engine started it
+    /// or it flowed in gaplessly.
+    fn heard(&self) -> Vec<TrackId> {
+        self.control
+            .calls()
+            .into_iter()
+            .filter_map(|c| match c {
+                Call::Play(id) | Call::Preload(id) => Some(id),
+                _ => None,
+            })
+            .collect()
     }
 
     fn events(&self) -> Vec<Event> {
@@ -375,21 +399,42 @@ fn next_still_skips_under_repeat_one() {
 #[test]
 fn shuffle_plays_every_track_exactly_once() {
     let rig = Rig::plain();
-    rig.play(&(1..=8).collect::<Vec<_>>());
-    rig.until_played(&[1]);
     rig.send(EngineCommand::SetShuffle(true));
+    rig.play(&(1..=8).collect::<Vec<_>>());
+    rig.until("first track", |c| c.now_playing().is_some());
 
     for _ in 0..7 {
         rig.finish_and_settle();
     }
-    rig.until("the whole snapshot", |c| c.played().len() >= 8);
+    rig.until("the whole snapshot", |_| rig.heard().len() >= 8);
 
-    let played = rig.control.played();
-    let unique: HashSet<TrackId> = played.iter().copied().collect();
+    let heard = rig.heard();
+    let unique: HashSet<TrackId> = heard.iter().copied().collect();
     assert_eq!(
         unique.len(),
         8,
-        "shuffle lost, duplicated or invented a track: {played:?}"
+        "shuffle lost, duplicated or invented a track: {heard:?}"
+    );
+}
+
+#[test]
+fn toggling_shuffle_does_not_interrupt_the_current_track() {
+    // The gain mode changes with shuffle (§6.7), but gain rides on the source,
+    // so applying it to the current track would mean restarting it. Jumping
+    // back to 0:00 mid-song is a far worse trade than a slightly wrong gain for
+    // the rest of one track.
+    let rig = Rig::plain();
+    rig.play(&[1, 2, 3]);
+    rig.until_played(&[1]);
+
+    rig.send(EngineCommand::SetShuffle(true));
+    std::thread::sleep(Duration::from_millis(200));
+
+    assert_eq!(rig.control.now_playing(), Some(TrackId(1)));
+    assert_eq!(
+        rig.control.played(),
+        vec![TrackId(1)],
+        "the track was restarted"
     );
 }
 
@@ -463,11 +508,8 @@ fn track_gain_applies_when_shuffled() {
         ..ReplayGain::default()
     };
     let rig = Rig::new(TestResolver::with_gain(1, gain));
-    rig.play(&[1, 2, 3]);
-    rig.until_played(&[1]);
-
-    rig.control.clear_calls();
     rig.send(EngineCommand::SetShuffle(true));
+    rig.play(&[1, 2, 3]);
     rig.until("track gain", |c| c.last_gain() == Some(-9.95));
 }
 
@@ -626,4 +668,124 @@ fn an_empty_source_stops_without_complaint() {
     rig.play(&[]);
     std::thread::sleep(Duration::from_millis(200));
     assert!(rig.control.played().is_empty());
+}
+
+// -------------------------------------------------------------- §3.4 gapless --
+
+#[test]
+fn a_preloaded_transition_never_reopens_the_track() {
+    // This is what gapless *is*, expressed as an assertion. The gap in a naive
+    // player comes from tearing down the output and constructing a new decoder
+    // at the boundary. If the engine calls `play` for the second track, that
+    // teardown happened and the transition was not gapless -- whatever it
+    // sounded like on the machine that tested it.
+    let rig = Rig::plain();
+    rig.play(&[1, 2]);
+    rig.until_played(&[1]);
+
+    rig.control.set_position(Duration::from_secs(197));
+    rig.until("preload", |c| c.preloaded() == Some(TrackId(2)));
+
+    rig.finish_and_settle();
+
+    assert_eq!(
+        rig.control.now_playing(),
+        Some(TrackId(2)),
+        "should have flowed into track 2"
+    );
+    assert_eq!(
+        rig.control.played(),
+        vec![TrackId(1)],
+        "track 2 was re-opened rather than flowed into, so the transition had a gap"
+    );
+}
+
+#[test]
+fn the_snapshot_stays_in_step_with_a_transition_it_did_not_drive() {
+    // The backend advances by itself, so the engine has to follow rather than
+    // decide. If the snapshot fell behind, Next would skip the wrong track and
+    // the queue overlay would mark the wrong row.
+    let rig = Rig::plain();
+    rig.play(&[1, 2, 3]);
+    rig.until_played(&[1]);
+    rig.control.set_position(Duration::from_secs(197));
+    rig.until("preload", |c| c.preloaded() == Some(TrackId(2)));
+
+    rig.finish_and_settle();
+    rig.wait_for_event(
+        "track change to 2",
+        |e| matches!(e, Event::TrackChanged { track, .. } if *track == TrackId(2)),
+    );
+
+    // The snapshot now points at 2, so Next must reach 3 rather than 2 again.
+    rig.send(EngineCommand::Next);
+    rig.until("next reaches track 3", |c| {
+        c.now_playing() == Some(TrackId(3))
+    });
+}
+
+#[test]
+fn a_retracted_preload_does_not_get_played() {
+    // rodio cannot un-append, so a cancelled source is one that yields nothing
+    // and is skipped. Without that, changing shuffle in the last seconds of a
+    // track would play whatever had already been queued.
+    let rig = Rig::plain();
+    rig.play(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    rig.until_played(&[1]);
+    rig.control.set_position(Duration::from_secs(197));
+    rig.until("preload", |c| c.preloaded() == Some(TrackId(2)));
+
+    rig.send(EngineCommand::SetPosition(5));
+    rig.until("jumped", |c| c.now_playing() == Some(TrackId(6)));
+
+    assert_eq!(
+        rig.control.queue(),
+        vec![TrackId(6)],
+        "a stale track was left queued"
+    );
+}
+
+#[test]
+fn each_queued_track_carries_its_own_gain() {
+    // rodio's player volume applies to everything queued, so per-track
+    // ReplayGain cannot go through it. Two tracks in flight means two
+    // corrections in flight.
+    let quiet = ReplayGain {
+        album_gain_db: Some(-12.0),
+        ..ReplayGain::default()
+    };
+    let resolver = TestResolver::default();
+    resolver
+        .gains
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((TrackId(2), quiet));
+    let rig = Rig::new(Arc::new(resolver));
+
+    rig.play(&[1, 2]);
+    rig.until_played(&[1]);
+    assert_eq!(rig.control.last_gain(), Some(0.0), "track 1 is untagged");
+
+    rig.control.set_position(Duration::from_secs(197));
+    rig.until("preload", |c| c.preloaded() == Some(TrackId(2)));
+    assert_eq!(
+        rig.control.last_gain(),
+        Some(-12.0),
+        "track 2 should carry its own gain"
+    );
+}
+
+#[test]
+fn repeat_one_does_not_preload() {
+    // It replays the same source rather than flowing into another, so there is
+    // nothing to prepare -- and preparing the same track would queue a second
+    // copy behind it.
+    let rig = Rig::plain();
+    rig.send(EngineCommand::SetRepeat(RepeatMode::One));
+    rig.play(&[1, 2]);
+    rig.until_played(&[1]);
+
+    rig.control.set_position(Duration::from_secs(197));
+    std::thread::sleep(Duration::from_millis(250));
+    assert_eq!(rig.control.preloaded(), None);
 }

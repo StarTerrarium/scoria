@@ -7,6 +7,7 @@
 //! device, which is what makes the engine's behaviour assertable rather than
 //! something you check by listening.
 
+pub mod cancellable;
 pub mod mock;
 pub mod rodio;
 
@@ -40,49 +41,56 @@ pub struct TrackRef {
 /// showing a playing track and a transport that does nothing. Report through
 /// `Result` and let the engine turn it into an `Event::Error`.
 pub trait AudioBackend: Send {
-    /// Starts `track` immediately, replacing anything playing.
+    /// Starts `track` immediately, replacing anything playing or queued.
+    ///
+    /// `gain_db` is the ReplayGain correction for *this* track, already
+    /// resolved to album or track mode by the engine (§6.7). It is passed per
+    /// call rather than set as backend state because gapless means two tracks
+    /// are in flight at once, each with its own correction -- "the current
+    /// gain" stops being a well-defined property of the backend.
     ///
     /// # Errors
     /// [`CoreError::Database`] if the file cannot be opened or decoded.
-    fn play(&mut self, track: &TrackRef) -> Result<(), CoreError>;
+    fn play(&mut self, track: &TrackRef, gain_db: f32) -> Result<(), CoreError>;
 
-    /// Prepares the following track so it can begin without a gap.
+    /// Queues the following track so it begins without a gap.
     ///
-    /// §3.4: appending to a rodio `Sink` is queueing, not gapless -- the next
-    /// track's decoder must be initialised and its first packets decoded before
-    /// the current track's tail drains. Real gapless lands at M5b; until then an
-    /// implementation may treat this as a hint and still produce a small gap.
+    /// §3.4: the next track's decoder must be initialised and its first packets
+    /// decoded before the current track's tail drains, or the result is
+    /// queueing rather than gapless.
     ///
     /// # Errors
     /// [`CoreError::Database`] if the file cannot be opened or decoded.
-    fn preload_next(&mut self, track: &TrackRef) -> Result<(), CoreError>;
+    fn preload_next(&mut self, track: &TrackRef, gain_db: f32) -> Result<(), CoreError>;
 
-    /// Discards anything preloaded, because what plays next just changed.
+    /// Discards anything queued but not yet playing, because what plays next
+    /// just changed. Must not disturb the track currently playing.
     fn clear_preload(&mut self);
 
     fn pause(&mut self);
     fn resume(&mut self);
 
-    /// Stops and discards position.
+    /// Stops and discards position and anything queued.
     fn stop(&mut self);
 
     /// # Errors
     /// [`CoreError::Database`] if the backend cannot seek this stream.
     fn seek(&mut self, position: Duration) -> Result<(), CoreError>;
 
-    /// Per-track ReplayGain correction, in decibels. Zero means unity (§6.7).
-    fn set_gain(&mut self, db: f32);
-
     /// User-facing volume as a linear amplitude, 0.0 to 1.0.
     ///
-    /// Separate from [`Self::set_gain`] on purpose: one is a correction the
-    /// tags asked for and changes per track, the other is what the user set and
-    /// does not. A backend with native ReplayGain support can honour both.
+    /// Distinct from ReplayGain, which travels with the track: this is what the
+    /// user set and applies to everything.
     fn set_volume(&mut self, linear: f32);
 
     /// How far into the current track playback has reached.
     fn position(&self) -> Duration;
 
-    /// Whether the current track has run out.
-    fn finished(&self) -> bool;
+    /// What is playing now, or `None` if nothing is.
+    ///
+    /// Takes `&mut self` because a gapless backend moves to the next track by
+    /// itself, and this is where it reconciles that with what it was told to
+    /// play. The engine calls it every tick and uses the answer to keep the
+    /// snapshot's position in step with what is actually being heard.
+    fn current(&mut self) -> Option<TrackId>;
 }
