@@ -556,19 +556,21 @@ fn the_queue_is_reported_when_it_changes() {
 }
 
 #[test]
-fn position_is_reported_once_per_second_not_once_per_tick() {
-    // The transport shows seconds; ten events a second to redraw the same
-    // string is waste the UI would only have to filter out again.
+fn position_is_reported_whenever_it_moves() {
+    // This test used to assert the opposite: that position was reported once
+    // per whole second, on the reasoning that the transport only shows seconds.
+    // That reasoning stopped being true when the transport grew a seek bar,
+    // which moves continuously -- throttling to one report a second made the
+    // handle lurch a second's width at a time.
     let rig = Rig::plain();
     rig.play(&[1]);
     rig.until_played(&[1]);
+    let _ = rig.events();
 
-    let _ = rig.events(); // Discard the report a starting track makes at 0:00.
-
-    rig.control.set_position(Duration::from_millis(1000));
-    std::thread::sleep(Duration::from_millis(400));
-    rig.control.set_position(Duration::from_millis(1100));
-    std::thread::sleep(Duration::from_millis(400));
+    for millis in [100, 250, 400, 550] {
+        rig.control.set_position(Duration::from_millis(millis));
+        std::thread::sleep(Duration::from_millis(120));
+    }
 
     let reported: Vec<Duration> = rig
         .events()
@@ -578,11 +580,31 @@ fn position_is_reported_once_per_second_not_once_per_tick() {
             _ => None,
         })
         .collect();
-    assert_eq!(
-        reported.len(),
-        1,
-        "expected one report for one whole second, got {reported:?}"
+
+    assert!(
+        reported.len() >= 4,
+        "sub-second movement should be reported, got {reported:?}"
     );
+}
+
+#[test]
+fn an_unchanged_position_is_not_reported_again() {
+    // Reporting movement is not the same as reporting every tick: a paused or
+    // stalled track should go quiet rather than repeat itself.
+    let rig = Rig::plain();
+    rig.play(&[1]);
+    rig.until_played(&[1]);
+    rig.control.set_position(Duration::from_millis(1234));
+    std::thread::sleep(Duration::from_millis(150));
+    let _ = rig.events();
+
+    std::thread::sleep(Duration::from_millis(300));
+    let repeats = rig
+        .events()
+        .into_iter()
+        .filter(|e| matches!(e, Event::PositionChanged(_)))
+        .count();
+    assert_eq!(repeats, 0, "a still position should not be re-reported");
 }
 
 // ------------------------------------------------------------- §3.4 preload --

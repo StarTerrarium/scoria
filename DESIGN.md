@@ -146,7 +146,7 @@ pub trait AudioBackend: Send {
 
 **Shuffle and repeat belong to the player, not to a snapshot.** They live on `PlaybackSource` because that is where `advance` needs them, but the engine keeps the preference and stamps it onto each new snapshot. Clicking a different track must not silently turn shuffle off, any more than it should reset the volume.
 
-Default implementation is rodio on Symphonia. The trait costs almost nothing and buys the option to swap in libmpv if pure-Rust gapless on an awkward format becomes a multi-week problem.
+Default implementation is rodio on Symphonia. The decoder must be told the stream is seekable and given its byte length; without those Symphonia treats the input as unrewindable, and seeking works forwards -- which is only reading ahead -- while every backward seek fails. The trait costs almost nothing and buys the option to swap in libmpv if pure-Rust gapless on an awkward format becomes a multi-week problem.
 
 **Gapless is not optional.** `preload_next` exists because the next track's decoder must be initialised before the current track's tail drains. FLAC, Vorbis and Opus carry exact sample counts and are straightforward. MP3 requires reading LAME/Info encoder delay and padding and trimming accordingly; that is post-1.0 work (§10).
 
@@ -411,7 +411,9 @@ Contents: a seek bar, then a row of artwork thumbnail, symbol-only transport con
 
 Inline between the title and the clock is the conventional placement and is wrong here, because it compresses the part of the bar that carries information. Full width also gives the most precision, which is what a ten-minute track needs.
 
-While it is being dragged, the bar and the elapsed time both show where the pointer is rather than where playback still is; position updates from the engine are ignored until release, or the handle would be pulled back out from under the pointer several times a second. A track of unknown length gets an inert strip rather than a movable handle, because a control that moves without doing anything is worse than one that does not move.
+While it is being dragged, the bar and the elapsed time both show where the pointer is rather than where playback still is; position updates from the engine are ignored until release, or the handle would be pulled back out from under the pointer several times a second.
+
+Position is reported whenever it moves, not once per second. A seek bar moves continuously, and a report per second makes the handle lurch a second's width at a time -- very visible on a short track. The elapsed text still renders whole seconds, so it is unaffected. A track of unknown length gets an inert strip rather than a movable handle, because a control that moves without doing anything is worse than one that does not move.
 
 Symbol buttons only, with hover tooltips. Jump-to-playing uses a crosshair/target glyph, matching the "reveal current item" convention from editors and file managers.
 

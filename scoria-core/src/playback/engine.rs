@@ -27,7 +27,7 @@ use std::time::Duration;
 /// an idle player is not busy. This is a poll rather than a callback because
 /// the backend trait deliberately does not hand out callbacks: a callback would
 /// run on the backend's own thread, and then two threads would own the source.
-const TICK: Duration = Duration::from_millis(100);
+const TICK: Duration = Duration::from_millis(50);
 
 /// How close to the end of a track the next one is prepared.
 ///
@@ -251,6 +251,7 @@ impl Engine {
                 if let Err(e) = self.backend.seek(position) {
                     self.emit(Event::Error(e));
                 } else {
+                    self.last_reported_position = position;
                     self.emit(Event::PositionChanged(position));
                 }
             }
@@ -321,11 +322,16 @@ impl Engine {
             Some(_) => {}
         }
 
+        // Reported every tick rather than on whole seconds.
+        //
+        // The first version throttled to one report per second, reasoning that
+        // the transport only shows seconds and anything finer was waste. That
+        // was true until the transport grew a seek bar, which moves
+        // continuously: at one report per second the handle jumped a whole
+        // second's width at a time, which on a short track is a visible lurch.
+        // The text still renders whole seconds, so nothing about it changes.
         let position = self.backend.position();
-        // Only report whole seconds: the transport shows seconds, and emitting
-        // ten events a second to redraw the same string is waste the UI would
-        // have to filter out anyway.
-        if position.as_secs() != self.last_reported_position.as_secs() {
+        if position != self.last_reported_position {
             self.last_reported_position = position;
             self.emit(Event::PositionChanged(position));
         }

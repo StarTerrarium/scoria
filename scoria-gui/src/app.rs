@@ -28,9 +28,12 @@ use std::time::Duration;
 ///
 /// A poll rather than a subscription over the channel: `Session` owns the
 /// receiver, and handing it to a subscription would mean the state no longer
-/// owns its own event stream. At this interval the cost is nothing and the
-/// transport still updates well within a frame of the second changing.
-const POLL: Duration = Duration::from_millis(60);
+/// owns its own event stream.
+///
+/// This is also the seek bar's frame rate, since the bar redraws when a
+/// position event is handled. Twenty a second is smooth to the eye and costs a
+/// redraw of a virtualised table, which is a few dozen rows.
+const POLL: Duration = Duration::from_millis(50);
 
 const SEARCH_ID: &str = "search";
 /// The table's scrollable, so the cursor can drag the view with it.
