@@ -17,7 +17,7 @@ scoria-core = { path = "scoria-core" }
 scoria-gui = { path = "scoria-gui" }
 
 # UI. Only ever depended on by scoria-gui -- see scripts/check-boundaries.sh.
-iced = "0.14"
+iced = { version = "0.14", features = ["tokio"] }
 
 # Audio. rodio drives Symphonia itself through its own feature flags, so a direct
 # symphonia dependency is not needed until gapless trimming (DESIGN.md 3.4) wants

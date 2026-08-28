@@ -9,6 +9,8 @@ use std::path::PathBuf;
 
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
+    /// Launch the graphical frontend. What a bare `scoria` does.
+    Gui,
     Help,
     Version,
     Info,
@@ -62,14 +64,17 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         }
     }
 
+    // A bare `scoria` opens the window. §3.1: this binary is thin and selects a
+    // frontend; the subcommands are the debugging harness underneath it.
     let Some((name, tail)) = rest.split_first() else {
         return Ok(Parsed {
-            command: Cmd::Help,
+            command: Cmd::Gui,
             root,
         });
     };
 
     let command = match *name {
+        "gui" => Cmd::Gui,
         "help" | "-h" | "--help" => Cmd::Help,
         "version" | "-V" | "--version" => Cmd::Version,
         "info" => Cmd::Info,
@@ -118,6 +123,7 @@ pub const HELP: &str = "\
 scoria -- a library-centric music player for Linux
 
 USAGE
+    scoria                     Open the player.
     scoria [--root PATH] <command>
 
 LIBRARY
@@ -159,8 +165,8 @@ mod tests {
     }
 
     #[test]
-    fn no_arguments_shows_help() {
-        assert_eq!(parse_args(&[]).command, Cmd::Help);
+    fn no_arguments_opens_the_window() {
+        assert_eq!(parse_args(&[]).command, Cmd::Gui);
     }
 
     #[test]

@@ -9,6 +9,13 @@ authors.workspace = true
 
 [dependencies]
 scoria-core.workspace = true
+iced.workspace = true
+serde.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

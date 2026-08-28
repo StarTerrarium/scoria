@@ -23,15 +23,39 @@ else
 fi
 
 # Invariant 3 / DESIGN.md 7.3: exactly one track table implementation.
+#
+# The first version of this check looked for `fn table`, which the real table
+# does not define -- it exposes `view`. So it matched nothing and reported green
+# from the day it was written. A check that cannot fail is worse than no check,
+# because it is mistaken for coverage.
+#
+# The rule now: anything that looks like a table lives in widgets/table.rs.
+# Anywhere else, a file named for tables or a function named for them is the
+# start of a second implementation.
+THE_TABLE='scoria-gui/src/widgets/table.rs'
 if [ -d scoria-gui/src ]; then
-  tables=$(find scoria-gui/src -name '*.rs' -exec grep -lE 'fn +(track_)?table\b' {} + 2>/dev/null | sort)
-  count=$(printf '%s' "$tables" | grep -c . || true)
-  if [ "$count" -gt 1 ]; then
-    fail "more than one track table implementation:"
-    echo "$tables" | sed 's/^/       /'
-    echo "     CLAUDE.md invariant 3. Layouts arrange the shared table; they do not define one."
+  if [ ! -f "$THE_TABLE" ]; then
+    pass "no track table yet"
   else
-    pass "at most one track table implementation"
+    rivals=$(
+      find scoria-gui/src -name '*.rs' ! -path "$THE_TABLE" 2>/dev/null | sort | while read -r f; do
+        case "$(basename "$f")" in
+          *table*) echo "$f (named for tables)"; continue ;;
+        esac
+        # `on_table` and friends are message handlers, not implementations.
+        if grep -E '^[[:space:]]*(pub )?fn [a-z_]*table[a-z_]*[(<]' "$f" \
+          | grep -qvE 'fn (on|handle|update)_'; then
+          echo "$f (defines a table function)"
+        fi
+      done
+    )
+    if [ -n "$rivals" ]; then
+      fail "more than one track table implementation:"
+      echo "$rivals" | sed 's/^/       /'
+      echo "     CLAUDE.md invariant 3. Layouts arrange the shared table; they do not define one."
+    else
+      pass "one track table, in widgets/table.rs"
+    fi
   fi
 fi
 

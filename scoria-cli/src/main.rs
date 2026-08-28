@@ -47,6 +47,9 @@ fn run() -> Result<()> {
         }
     };
 
+    if parsed.command == Cmd::Gui {
+        return scoria_gui::run();
+    }
     if parsed.command == Cmd::Help {
         write!(out, "{}", args::HELP)?;
         return Ok(());
@@ -66,7 +69,7 @@ fn run() -> Result<()> {
     }
 
     match parsed.command {
-        Cmd::Help | Cmd::Version => Ok(()),
+        Cmd::Gui | Cmd::Help | Cmd::Version => Ok(()),
         Cmd::Info => info(&session, &mut out),
         Cmd::Config => config(&session, &mut out),
         Cmd::Scan { root } => scan(&mut session, &mut out, root),

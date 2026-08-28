@@ -1,0 +1,499 @@
+//! The application: state, messages, update, view.
+//!
+//! Everything here talks to the core by sending `Command` and reading `Event`
+//! (`DESIGN.md` §3.2). **No function in this file calls a method on a library,
+//! database or playback object** -- that is `CLAUDE.md` invariant 2, and the
+//! way to tell it has been broken is a view or handler reaching for
+//! `self.library.something()`.
+//!
+//! `Session` is the one thing held, and it only accepts commands.
+
+use crate::keymap::{Action, Keymap};
+use crate::layouts::{self, BrowserPlacement};
+use crate::theme::Theme;
+use crate::widgets::{table, transport};
+use iced::widget::{container, row, text, text_input};
+use iced::{Element, Fill, Length, Subscription, Task};
+use scoria_core::command::Command;
+use scoria_core::config::Paths;
+use scoria_core::event::{Event as CoreEvent, PlaybackState};
+use scoria_core::id::TrackId;
+use scoria_core::model::Track;
+use scoria_core::playback::RepeatMode;
+use scoria_core::query::Selection;
+use scoria_core::session::Session;
+use std::time::Duration;
+
+/// How often the core's event stream is drained.
+///
+/// A poll rather than a subscription over the channel: `Session` owns the
+/// receiver, and handing it to a subscription would mean the state no longer
+/// owns its own event stream. At this interval the cost is nothing and the
+/// transport still updates well within a frame of the second changing.
+const POLL: Duration = Duration::from_millis(60);
+
+const SEARCH_ID: &str = "search";
+
+#[derive(Debug, Clone)]
+pub enum Message {
+    /// Drain whatever the core has produced.
+    Tick,
+    Table(table::Event),
+    Transport(transport::Event),
+    SearchChanged(String),
+    /// A key press, already resolved through the keymap.
+    Action(Action),
+    Scrolled(f32),
+    Resized(f32),
+}
+
+/// Everything the window shows.
+pub struct App {
+    /// `None` when the library could not be opened. The window still opens and
+    /// says why: §5.1 makes first run a "point me at your library" moment, and
+    /// a failure to read the database is the same shape of problem.
+    session: Option<Session>,
+    theme: Theme,
+    keymap: Keymap,
+    placement: BrowserPlacement,
+
+    /// The current query and its result. `rows` is the ordered id list; the
+    /// tracks themselves are looked up through the session's index.
+    selection: Selection,
+    rows: Vec<TrackId>,
+    lines: Vec<table::Line>,
+    search: String,
+
+    /// The row the keyboard is on. Selection is deliberately independent of
+    /// playback -- §6.1: browsing never disturbs what is playing, and the two
+    /// are allowed to disagree.
+    cursor: Option<usize>,
+
+    playing: Option<TrackId>,
+    state: PlaybackState,
+    position: Duration,
+    shuffled: bool,
+    repeat: RepeatMode,
+    volume: f32,
+
+    scroll_offset: f32,
+    viewport_height: f32,
+    status: String,
+}
+
+impl App {
+    /// Opens the library and runs the first query.
+    ///
+    /// # Errors
+    ///
+    /// Whatever opening the session failed with.
+    pub fn new() -> Result<Self, scoria_core::error::CoreError> {
+        let paths = Paths::from_env()?;
+        let session = Session::open(paths)?;
+        let mut app = Self::with_session(Some(session), String::new());
+        app.refresh();
+        Ok(app)
+    }
+
+    /// A window with no library behind it, showing why.
+    #[must_use]
+    pub fn disconnected(reason: String) -> Self {
+        Self::with_session(None, reason)
+    }
+
+    fn with_session(session: Option<Session>, status: String) -> Self {
+        Self {
+            session,
+            theme: Theme::dark(),
+            keymap: Keymap::standard(),
+            placement: BrowserPlacement::default(),
+            selection: Selection::all(),
+            rows: Vec::new(),
+            lines: Vec::new(),
+            search: String::new(),
+            cursor: None,
+            playing: None,
+            state: PlaybackState::Stopped,
+            position: Duration::ZERO,
+            shuffled: false,
+            repeat: RepeatMode::Off,
+            volume: 1.0,
+            scroll_offset: 0.0,
+            viewport_height: 600.0,
+            status,
+        }
+    }
+
+    /// Re-runs the current selection.
+    ///
+    /// Goes through the session, which returns the ordered ids and the derived
+    /// groups; the table is rebuilt from those rather than from anything the
+    /// view reaches for itself.
+    fn refresh(&mut self) {
+        let Some(session) = &self.session else { return };
+        match session.query(&self.selection) {
+            Ok(outcome) => {
+                self.lines = table::build_lines(outcome.tracks.len(), &outcome.groups);
+                self.rows = outcome.tracks;
+                self.status = format!(
+                    "{} of {} tracks{}",
+                    self.rows.len(),
+                    outcome.total,
+                    if self.selection.is_filtered() {
+                        " (filtered)"
+                    } else {
+                        ""
+                    }
+                );
+                if self.cursor.is_some_and(|c| c >= self.rows.len()) {
+                    self.cursor = None;
+                }
+            }
+            Err(e) => self.status = format!("query failed: {e}"),
+        }
+    }
+
+    pub fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Tick => self.drain_core_events(),
+            Message::Table(event) => self.on_table(event),
+            Message::Transport(event) => self.on_transport(event),
+            Message::SearchChanged(query) => {
+                self.search = query;
+                self.selection.search = if self.search.is_empty() {
+                    None
+                } else {
+                    Some(self.search.clone())
+                };
+                self.scroll_offset = 0.0;
+                self.refresh();
+            }
+            Message::Action(action) => return self.on_action(action),
+            Message::Scrolled(offset) => self.scroll_offset = offset,
+            Message::Resized(height) => self.viewport_height = height,
+        }
+        Task::none()
+    }
+
+    /// Reads the core's event stream. The only direction information flows in.
+    fn drain_core_events(&mut self) {
+        let Some(session) = &self.session else { return };
+        let events = session.drain_events();
+        for event in events {
+            match event {
+                CoreEvent::TrackChanged { track, .. } => {
+                    self.playing = Some(track);
+                    self.position = Duration::ZERO;
+                }
+                CoreEvent::PositionChanged(position) => self.position = position,
+                CoreEvent::PlaybackStateChanged(state) => {
+                    self.state = state;
+                    if state == PlaybackState::Stopped {
+                        self.playing = None;
+                    }
+                }
+                CoreEvent::QueueChanged(source) => {
+                    self.shuffled = source.is_shuffled();
+                    self.repeat = source.repeat();
+                }
+                CoreEvent::LibraryChanged(_) => self.refresh(),
+                CoreEvent::Error(e) => self.status = format!("{e}"),
+                CoreEvent::QueryResult(..) | CoreEvent::ScanProgress { .. } => {}
+            }
+        }
+    }
+
+    fn on_table(&mut self, event: table::Event) {
+        match event {
+            table::Event::Select(index) => self.cursor = Some(index),
+            table::Event::Activate(index) => {
+                self.cursor = Some(index);
+                self.play_from_cursor();
+            }
+            // The right-click menu arrives with the overlays at M9. §9.1 makes
+            // "Show album art" the one escape hatch from artwork following
+            // playback, so it belongs there rather than here.
+            table::Event::Context(index) => self.cursor = Some(index),
+        }
+    }
+
+    fn on_transport(&mut self, event: transport::Event) {
+        let command = match event {
+            transport::Event::PlayPause => {
+                if self.state == PlaybackState::Playing {
+                    Command::Pause
+                } else {
+                    Command::Resume
+                }
+            }
+            transport::Event::Next => Command::Next,
+            transport::Event::Previous => Command::Previous,
+            transport::Event::ToggleShuffle => Command::SetShuffle(!self.shuffled),
+            transport::Event::CycleRepeat => Command::SetRepeat(next_repeat(self.repeat)),
+            transport::Event::SetVolume(v) => {
+                self.volume = v;
+                Command::SetVolume(v)
+            }
+            transport::Event::JumpToPlaying => {
+                self.jump_to_playing();
+                return;
+            }
+            // The artwork overlay arrives at M9.
+            transport::Event::ShowArtwork => return,
+        };
+        self.send(command);
+    }
+
+    fn on_action(&mut self, action: Action) -> Task<Message> {
+        match action {
+            Action::MoveDown => self.move_cursor(1),
+            Action::MoveUp => self.move_cursor(-1),
+            Action::PageDown => self.move_cursor(self.page()),
+            Action::PageUp => self.move_cursor(-self.page()),
+            Action::MoveToStart => self.cursor = (!self.rows.is_empty()).then_some(0),
+            Action::MoveToEnd => self.cursor = self.rows.len().checked_sub(1),
+            // Multiple selection arrives with the selection model at M10; the
+            // actions exist now so the keymap is complete.
+            Action::ExtendUp => self.move_cursor(-1),
+            Action::ExtendDown => self.move_cursor(1),
+            Action::PlaySelection => self.play_from_cursor(),
+            Action::PlayPause => {
+                let command = if self.state == PlaybackState::Playing {
+                    Command::Pause
+                } else {
+                    Command::Resume
+                };
+                self.send(command);
+            }
+            Action::Next => self.send(Command::Next),
+            Action::Previous => self.send(Command::Previous),
+            Action::ToggleShuffle => self.send(Command::SetShuffle(!self.shuffled)),
+            Action::CycleRepeat => self.send(Command::SetRepeat(next_repeat(self.repeat))),
+            Action::JumpToPlaying => self.jump_to_playing(),
+            Action::CycleLayout => {
+                self.placement = self.placement.cycle();
+                self.status = self.placement.label().to_owned();
+            }
+            Action::FocusSearch => {
+                return iced::widget::operation::focus(iced::widget::Id::new(SEARCH_ID));
+            }
+            // Overlays arrive at M9.
+            Action::ToggleQueue | Action::ToggleHelp | Action::CloseOverlay => {}
+        }
+        Task::none()
+    }
+
+    /// §6.5: restore an unfiltered full-library view and scroll to the playing
+    /// track. Deliberately not scoped to its album or artist -- the default
+    /// sort puts it inside its album anyway, with the artist's other albums
+    /// immediately above and below.
+    fn jump_to_playing(&mut self) {
+        let Some(playing) = self.playing else {
+            self.status = "nothing is playing".to_owned();
+            return;
+        };
+
+        self.search.clear();
+        self.selection = Selection::all();
+        self.refresh();
+
+        if let Some(index) = self.rows.iter().position(|id| *id == playing) {
+            self.cursor = Some(index);
+            self.scroll_to_cursor();
+        }
+    }
+
+    /// Turns the cursor into a snapshot and plays it.
+    ///
+    /// The §6.3 setting decides what gets snapshotted, and the session is the
+    /// one place that decision is made -- which is why this hands over what is
+    /// shown rather than deciding for itself.
+    fn play_from_cursor(&mut self) {
+        let Some(index) = self.cursor else { return };
+        let Some(at) = self.rows.get(index).copied() else {
+            return;
+        };
+
+        let Some(session) = &self.session else { return };
+        let label = self.selection.label();
+        let spec = session.source_spec(self.rows.clone(), label);
+        self.send(Command::PlayFrom { source: spec, at });
+    }
+
+    fn send(&mut self, command: Command) {
+        let Some(session) = &mut self.session else {
+            self.status = "no library is open".to_owned();
+            return;
+        };
+        if let Err(e) = session.handle(command) {
+            self.status = format!("{e}");
+        }
+    }
+
+    fn move_cursor(&mut self, delta: isize) {
+        if self.rows.is_empty() {
+            return;
+        }
+        let last = self.rows.len().saturating_sub(1);
+        let next = match self.cursor {
+            None => {
+                if delta < 0 {
+                    last
+                } else {
+                    0
+                }
+            }
+            Some(current) => current.saturating_add_signed(delta).min(last),
+        };
+        self.cursor = Some(next);
+        self.scroll_to_cursor();
+    }
+
+    fn page(&self) -> isize {
+        ((self.viewport_height / table::ROW_HEIGHT).floor() as isize - 1).max(1)
+    }
+
+    /// Keeps the cursor inside the viewport by nudging the scroll offset.
+    fn scroll_to_cursor(&mut self) {
+        let Some(cursor) = self.cursor else { return };
+        let Some(line) = self.line_of_row(cursor) else {
+            return;
+        };
+
+        let top = line as f32 * table::ROW_HEIGHT;
+        let bottom = top + table::ROW_HEIGHT;
+
+        if top < self.scroll_offset {
+            self.scroll_offset = top;
+        } else if bottom > self.scroll_offset + self.viewport_height {
+            self.scroll_offset = bottom - self.viewport_height;
+        }
+    }
+
+    /// Which display line a row sits on, accounting for group headers.
+    fn line_of_row(&self, row: usize) -> Option<usize> {
+        self.lines
+            .iter()
+            .position(|line| matches!(line, table::Line::Track(i) if *i == row))
+    }
+
+    fn tracks(&self) -> Vec<&Track> {
+        self.session
+            .as_ref()
+            .map_or_else(Vec::new, |s| s.index().rows(&self.rows))
+    }
+
+    fn track(&self, id: TrackId) -> Option<&Track> {
+        self.session.as_ref()?.index().track(id)
+    }
+
+    pub fn view(&self) -> Element<'_, Message, Theme> {
+        let tracks = self.tracks();
+
+        let table_view = table::TableView {
+            lines: &self.lines,
+            rows: &tracks,
+            selected: self.cursor,
+            playing: self.playing,
+            scroll_offset: self.scroll_offset,
+            viewport_height: self.viewport_height,
+            theme: &self.theme,
+        };
+
+        let now_playing = self.playing.and_then(|id| self.track(id));
+        let transport_view = transport::TransportView {
+            track: now_playing,
+            state: self.state,
+            position: self.position,
+            shuffled: self.shuffled,
+            repeat: self.repeat,
+            volume: self.volume,
+            theme: &self.theme,
+        };
+
+        let muted = self.theme.text_style(self.theme.muted_colour());
+        let search = container(
+            row![
+                text_input("Search", &self.search)
+                    .id(iced::widget::Id::new(SEARCH_ID))
+                    .on_input(Message::SearchChanged)
+                    .padding(4)
+                    .size(13)
+                    .width(Length::Fixed(320.0)),
+                text(self.status.clone())
+                    .size(12)
+                    .style(move |_t: &Theme| muted),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding([6, 10])
+        .width(Fill);
+
+        layouts::arrange(
+            self.placement,
+            table::view(&table_view, Message::Table),
+            transport::view(&transport_view, Message::Transport),
+            search.into(),
+            None,
+            &self.theme,
+        )
+    }
+
+    pub fn theme(&self) -> Theme {
+        self.theme.clone()
+    }
+
+    pub fn title(&self) -> String {
+        match self.playing.and_then(|id| self.track(id)) {
+            Some(track) => format!("{} — {} — Scoria", track.title, track.artist),
+            None => "Scoria".to_owned(),
+        }
+    }
+
+    /// Ticks to drain the event stream, and key presses resolved through the
+    /// keymap.
+    ///
+    /// §10: the keymap is a data structure. This is the only place a key press
+    /// is looked at, and all it does is ask the keymap what the key means.
+    pub fn subscription(&self) -> Subscription<Message> {
+        let keymap = self.keymap.clone();
+        let keys = iced::event::listen_with(move |event, status, _window| {
+            // A key typed into the search field belongs to the search field.
+            if status == iced::event::Status::Captured {
+                return None;
+            }
+            match event {
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    ref key,
+                    modifiers,
+                    ..
+                }) => KEYMAP
+                    .with(|k| k.borrow().resolve_iced(key, modifiers))
+                    .map(Message::Action),
+                _ => None,
+            }
+        });
+        let _ = keymap;
+
+        Subscription::batch([iced::time::every(POLL).map(|_| Message::Tick), keys])
+    }
+}
+
+thread_local! {
+    /// The keymap the subscription resolves against.
+    ///
+    /// `listen_with` takes a plain `fn`, not a closure, so the map cannot be
+    /// captured. It is thread-local rather than global because iced's event
+    /// loop is single-threaded, and this keeps the keymap a value that can be
+    /// swapped -- which is the whole point of §10.
+    static KEYMAP: std::cell::RefCell<Keymap> = std::cell::RefCell::new(Keymap::standard());
+}
+
+const fn next_repeat(current: RepeatMode) -> RepeatMode {
+    match current {
+        RepeatMode::Off => RepeatMode::All,
+        RepeatMode::All => RepeatMode::One,
+        RepeatMode::One => RepeatMode::Off,
+    }
+}
