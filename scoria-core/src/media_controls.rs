@@ -28,7 +28,9 @@ const SEEK_STEP: Duration = Duration::from_secs(10);
 
 /// The bridge between the desktop's controls and the session.
 pub struct MediaBridge {
-    controls: MediaControls,
+    /// An `Option` only so that [`Drop`] can move it out. It is `Some` for the
+    /// whole life of the bridge.
+    controls: Option<MediaControls>,
     commands: Receiver<Command>,
     /// What was last published, so unchanged state is not re-sent. Position
     /// moves every tick, and telling D-Bus about it forty times a second would
@@ -77,7 +79,7 @@ impl MediaBridge {
             })?;
 
         Ok(Self {
-            controls,
+            controls: Some(controls),
             commands,
             published: None,
         })
@@ -126,7 +128,9 @@ impl MediaBridge {
                 cover_url: cover.as_deref(),
                 duration: Some(track.duration),
             });
-            let _ = self.controls.set_metadata(metadata);
+            if let Some(controls) = self.controls.as_mut() {
+                let _ = controls.set_metadata(metadata);
+            }
         }
 
         let progress = Some(MediaPosition(position));
@@ -135,7 +139,9 @@ impl MediaBridge {
             PlaybackState::Paused => MediaPlayback::Paused { progress },
             PlaybackState::Stopped => MediaPlayback::Stopped,
         };
-        let _ = self.controls.set_playback(playback);
+        if let Some(controls) = self.controls.as_mut() {
+            let _ = controls.set_playback(playback);
+        }
     }
 }
 
@@ -167,6 +173,35 @@ fn signed(direction: SeekDirection, by: Duration) -> i64 {
     match direction {
         SeekDirection::Forward => millis,
         SeekDirection::Backward => -millis,
+    }
+}
+
+/// Lets go of the desktop's controls without making anyone wait for it.
+///
+/// souvlaki's own `Drop` tells its D-Bus service thread to stop and then joins
+/// it, and that thread finishes what it had queued first -- which costs about a
+/// second per property change still in flight. On the way out of an
+/// application that is a window that will not go away: measured at 300ms to
+/// 850ms with the controls attached, against 15ms without them.
+///
+/// So the waiting is moved somewhere nobody is looking. Nothing is skipped --
+/// the thread still stops and the bus name is still released -- it just happens
+/// off the path between clicking the close button and the window going. If the
+/// process exits first, the kernel closes the connection, which releases the
+/// name anyway.
+///
+/// A thread that cannot be spawned drops the controls here instead, which is
+/// the old blocking behaviour rather than a leak.
+impl Drop for MediaBridge {
+    fn drop(&mut self) {
+        let Some(controls) = self.controls.take() else {
+            return;
+        };
+        let _ = std::thread::Builder::new()
+            .name("scoria-media-shutdown".to_owned())
+            .spawn(move || drop(controls));
+        // Deliberately not joined. The window is going, and nothing left in
+        // this process depends on the answer.
     }
 }
 
