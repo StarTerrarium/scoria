@@ -42,8 +42,11 @@ if [ -d scoria-gui/src ]; then
         case "$(basename "$f")" in
           *table*) echo "$f (named for tables)"; continue ;;
         esac
-        # `on_table` and friends are message handlers, not implementations.
-        if grep -E '^[[:space:]]*(pub )?fn [a-z_]*table[a-z_]*[(<]' "$f" \
+        # Tests are cut first: a test *about* the table is named for it and is
+        # not a second one. `on_table` and friends are message handlers, not
+        # implementations.
+        if sed '/^#\[cfg(test)\]/,$d' "$f" \
+          | grep -E '^[[:space:]]*(pub )?fn [a-z_]*table[a-z_]*[(<]' \
           | grep -qvE 'fn (on|handle|update)_'; then
           echo "$f (defines a table function)"
         fi
