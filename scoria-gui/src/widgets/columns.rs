@@ -66,6 +66,28 @@ impl Column {
         }
     }
 
+    /// The marker shown instead of a track number on the playing row.
+    ///
+    /// A glyph rather than a colour, because colour alone is not enough here:
+    /// §11 makes the now-playing tint quiet and ambient on purpose, and a row
+    /// that is *also* selected takes the selection's background -- leaving the
+    /// two indistinguishable exactly when it matters, since the queue opens
+    /// with its cursor on the playing row.
+    pub const PLAYING_MARKER: &'static str = "▶";
+
+    /// What this column shows, given whether the row is playing.
+    ///
+    /// Only the track-number column changes, which is the least missed: in a
+    /// play order, where you are matters more than a track's number within its
+    /// own album.
+    #[must_use]
+    pub fn value_for(self, track: &Track, playing: bool) -> String {
+        if playing && matches!(self, Self::TrackNumber) {
+            return Self::PLAYING_MARKER.to_owned();
+        }
+        self.value(track)
+    }
+
     /// What this column shows for a track.
     #[must_use]
     pub fn value(self, track: &Track) -> String {
@@ -361,6 +383,55 @@ mod tests {
                 "{} would sort on a date while showing something else",
                 column.name()
             );
+        }
+    }
+
+    #[test]
+    fn the_playing_row_is_marked_where_its_number_would_be() {
+        let track = playing_track();
+        assert_eq!(
+            Column::TrackNumber.value_for(&track, true),
+            Column::PLAYING_MARKER,
+            "the playing row needs a mark that does not depend on its background"
+        );
+        assert_eq!(Column::TrackNumber.value_for(&track, false), "7");
+    }
+
+    #[test]
+    fn the_marker_replaces_nothing_else() {
+        // Overwriting a title or an album with a glyph would lose information
+        // the row exists to show.
+        let track = playing_track();
+        for column in Column::ALL {
+            if column == Column::TrackNumber {
+                continue;
+            }
+            assert_eq!(
+                column.value_for(&track, true),
+                column.value(&track),
+                "{} changed when the row started playing",
+                column.name()
+            );
+        }
+    }
+
+    fn playing_track() -> Track {
+        Track {
+            id: scoria_core::TrackId(1),
+            album_id: scoria_core::AlbumId(1),
+            path: scoria_core::RelativePath::new("a/b.flac").unwrap(),
+            title: "Title".to_owned(),
+            artist: "Artist".to_owned(),
+            album_artist: "Album Artist".to_owned(),
+            album_artist_sort: None,
+            album: "Album".to_owned(),
+            date: scoria_core::Date::parse("2020"),
+            disc: Some(1),
+            track_number: Some(7),
+            duration: std::time::Duration::from_secs(100),
+            replay_gain: scoria_core::ReplayGain::default(),
+            added_at: scoria_core::Timestamp(0),
+            available: true,
         }
     }
 

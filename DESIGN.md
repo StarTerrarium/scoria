@@ -533,6 +533,8 @@ That palette is small — background, text, primary, success, danger, warning �
 
 So: **our own semantic role table**, with a function deriving it from an iced `Palette` for the built-ins and per-role overrides where the derivation looks wrong. We get the 22 themes as starting points without being limited to what they name.
 
+**Colour alone cannot carry the now-playing row.** The tint is deliberately quieter than selection, because it marks a fact rather than an action -- and a row that is *both* selected and playing takes the selection's background, which would make the two indistinguishable exactly where it matters most: the queue opens with its cursor on the playing track. The playing row therefore also carries a marker glyph, in place of its track number. In a play order, where you are matters more than a track's number within its own album.
+
 **Themes are expressed in our vocabulary, not in iced types.** `Theme` holds `selected_row`, `now_playing`, `text_muted` as plain colours; the iced layer converts at the boundary. This is what lets the TUI consume the same theme definitions with a different converter. Iced `Color` values scattered through view code would force a parallel theme system that drifts immediately.
 
 1.0 ships a curated handful, dark-first, defaulting to dark. **Do not follow the system light/dark preference** — a dense music player that flips to light because the sun went down is startling rather than helpful.
