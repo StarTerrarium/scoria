@@ -517,7 +517,23 @@ Two sections: what the application knows -- including things the file does not s
 
 Tag editing is post-1.0 and lands here. An editor needs a save/cancel boundary, which a docked pane that mutates on selection change has nowhere to put. Keeping tag writing behind a deliberate modal action also protects a carefully Picard-tagged library from accidental edits.
 
-### 9.4 Playback mode (post-1.0)
+### 9.4 Settings
+
+A drawer like the others, under §9's rules. Not yet built.
+
+**What belongs here is what has nowhere else to live.** Several settings already have a natural home and stay there: columns and the sort preset are configured from the header they affect, browser placement is a keystroke, drawer heights are dragged. A setting edited where it applies needs no screen, and moving those here would make them harder to find, not easier.
+
+That leaves the ones with no natural place, which is what this drawer is for:
+
+- **Library root** (§5.1). Also the first-run picker: the same screen, reached differently.
+- **Play behaviour** (§6.3). §6.3 calls it "the one user-facing option" in the playback model, and it currently has no interface at all.
+- **Theme** (§11). 1.0 ships a curated handful; picking between them is a list.
+
+Post-1.0 additions land here too: a ReplayGain toggle (§6.7), and whatever tag editing needs that the properties dialog does not own.
+
+**The organising rule matters more than the contents.** §2 says configuration tunes defaults and never constructs the application, and the test is whether someone who never opens settings has a fully usable player. A settings screen is where that promise goes to die if it is treated as the place for anything configurable -- so the rule is that a setting belongs here only when there is no better place, and adding one is a reason to check §2 rather than a routine act.
+
+### 9.5 Playback mode (post-1.0)
 
 Not a fourth layout. A mode with no table, which is what makes it safe: it shares nothing with the library views and cannot drift into their code.
 
@@ -583,7 +599,7 @@ Themes are defined as serialisable data even while compiled in, so user themes l
 
 ### 1.0
 
-Single-root library with watching and rescan. Picard-tagged FLAC as first-class, broad format support before release. Three layouts via `BrowserPlacement`. Filter panes, dense track table with column configuration and sort presets. Snapshot playback with the two-mode setting, shuffle and repeat (§6.6). ReplayGain from tags (§6.7). Scan-time artwork extraction and thumbnail cache (§5.3). Gapless for FLAC/Vorbis/Opus. Queue overlay, artwork overlay, properties overlay (read-only). Transport bar. Arrow-key navigation with a data-driven keymap. Curated dark themes. MPRIS. FTS5 search.
+Single-root library with watching and rescan. Picard-tagged FLAC as first-class, broad format support before release. Three layouts via `BrowserPlacement`. Filter panes, dense track table with column configuration and sort presets. Snapshot playback with the two-mode setting, shuffle and repeat (§6.6). ReplayGain from tags (§6.7). Scan-time artwork extraction and thumbnail cache (§5.3). Gapless for FLAC/Vorbis/Opus. Queue overlay, artwork overlay, properties overlay (read-only), settings overlay (§9.4). Transport bar. Arrow-key navigation with a data-driven keymap. Curated dark themes. MPRIS. FTS5 search.
 
 ### Post-1.0
 
