@@ -99,9 +99,22 @@ impl Column {
 
     /// Which sort field a click on this heading asks for (§7.3).
     ///
-    /// `Album` sorts chronologically rather than by title, because that is what
-    /// the field means (§4.4) -- the heading and the ordering are allowed to
-    /// come from different columns.
+    /// **Sorts by what the column shows.** That is the whole contract of a
+    /// clickable heading, and it is not the same as picking the sort field with
+    /// the matching name -- §4.4 is explicit that a sort field is not a column.
+    ///
+    /// `Album` is where the two diverge. `SortField::Album` sorts on the
+    /// *date* and displays the title, which is what puts an artist's albums in
+    /// release order in the default preset. Wiring the heading to it sorted the
+    /// library chronologically while showing titles, so the result looked
+    /// shuffled: Dirt at the top and a 2026 record at the bottom, with
+    /// everything in between apparently unordered. `AlbumTitle` is the field
+    /// that means what the column shows.
+    ///
+    /// `AlbumArtist` is a deliberate exception: it orders on
+    /// `albumartistsort`, so `The Omnific` files under O. That is §4.4's
+    /// central case and the reason the Picard assumption matters, not an
+    /// oversight.
     #[must_use]
     pub const fn sort_field(self) -> scoria_core::SortField {
         use scoria_core::SortField as F;
@@ -110,7 +123,7 @@ impl Column {
             Self::Title => F::Title,
             Self::AlbumArtist => F::AlbumArtist,
             Self::Artist => F::Artist,
-            Self::Album => F::Album,
+            Self::Album => F::AlbumTitle,
             Self::Duration => F::Duration,
             Self::Year => F::Date,
         }
@@ -298,6 +311,58 @@ mod tests {
     #![allow(clippy::indexing_slicing, clippy::unwrap_used)]
 
     use super::*;
+
+    #[test]
+    fn clicking_a_heading_sorts_by_what_that_column_shows() {
+        // The bug this guards: ALBUM was wired to SortField::Album, which sorts
+        // on the date and displays the title. Clicking it ordered the library
+        // chronologically while showing album names, which reads as no order at
+        // all.
+        use scoria_core::SortField as F;
+
+        for (column, expected) in [
+            (Column::TrackNumber, F::TrackNumber),
+            (Column::Title, F::Title),
+            (Column::Artist, F::Artist),
+            (Column::Album, F::AlbumTitle),
+            (Column::Duration, F::Duration),
+            (Column::Year, F::Date),
+        ] {
+            assert_eq!(
+                column.sort_field(),
+                expected,
+                "{} should sort by what it displays",
+                column.name()
+            );
+        }
+    }
+
+    #[test]
+    fn the_album_artist_heading_orders_by_sort_name_on_purpose() {
+        // §4.4's central case: `The Omnific` files under O. The one heading
+        // whose ordering is deliberately not its displayed text.
+        assert_eq!(
+            Column::AlbumArtist.sort_field(),
+            scoria_core::SortField::AlbumArtist
+        );
+    }
+
+    #[test]
+    fn no_heading_sorts_by_a_field_it_does_not_show() {
+        // A column ordering on something invisible looks broken, whatever the
+        // ordering is. AlbumArtist is the documented exception above.
+        for column in Column::ALL {
+            if column == Column::AlbumArtist {
+                continue;
+            }
+            assert_ne!(
+                column.sort_field(),
+                scoria_core::SortField::Album,
+                "{} would sort on a date while showing something else",
+                column.name()
+            );
+        }
+    }
 
     #[test]
     fn the_default_shows_every_column() {

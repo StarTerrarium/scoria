@@ -600,3 +600,44 @@ fn an_empty_library_queries_cleanly() {
     assert_eq!(outcome.album_artists.total, 0);
     assert_eq!(outcome.total, 0);
 }
+
+// ------------------------------------------- what a column-header sort does --
+
+#[test]
+fn sorting_by_album_title_is_alphabetical_not_chronological() {
+    // The two fields exist because they answer different questions, and using
+    // the wrong one is invisible until you read the result: chronological order
+    // shown as album titles looks like no order at all.
+    let library = Library::new();
+
+    let alphabetical = Selection {
+        sort: scoria_core::SortChain::new(vec![SortKey::asc(SortField::AlbumTitle)]),
+        ..Selection::all()
+    };
+    let albums: Vec<String> = library
+        .index()
+        .rows(&library.run(&alphabetical).tracks)
+        .iter()
+        .map(|t| t.album.clone())
+        .collect();
+
+    let mut expected = albums.clone();
+    expected.sort_by_key(|a| a.to_lowercase());
+    assert_eq!(albums, expected, "album titles should read A to Z");
+
+    // And the other field still does what the default preset needs.
+    let chronological = Selection {
+        sort: scoria_core::SortChain::new(vec![SortKey::asc(SortField::Album)]),
+        ..Selection::all()
+    };
+    let years: Vec<i16> = library
+        .index()
+        .rows(&library.run(&chronological).tracks)
+        .iter()
+        .filter_map(|t| t.date.map(|d| d.year()))
+        .collect();
+
+    let mut ordered = years.clone();
+    ordered.sort_unstable();
+    assert_eq!(years, ordered, "the Album field should still order by date");
+}

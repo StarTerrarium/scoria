@@ -414,6 +414,10 @@ A drag-and-drop chain builder is a DIY layout system wearing different clothes. 
 
 Clicking a column header applies a **transient override** on top of the configured sort, with a visible indicator and one action to drop back. It never replaces the configured chain. Same relationship the queue snapshot has to the library: a temporary state you can always return from.
 
+**A heading sorts by what its column shows.** That is the whole contract of a clickable heading, and it is *not* the same as choosing the sort field with the matching name -- §4.4 is explicit that a sort field is not a column, and `Album` is exactly where the two diverge. `SortField::Album` orders on the date and displays the title, which is what puts an artist's records in release order in the default preset; wiring the heading to it ordered the library chronologically while showing album names, which reads as no order at all. `AlbumTitle` is the field that means what the column shows.
+
+The one deliberate exception is album artist, which orders on `albumartistsort` so that `The Omnific` files under O. That is §4.4's central case, not an oversight.
+
 On top of, not instead of: the configured chain still breaks ties, so overriding on a coarse field leaves albums in order within it. Clicking the same heading reverses the direction and clicking a third time drops the override, so it is never more than one click from gone. The heading carrying it shows an arrow; the others show nothing, because a marker on every column would say nothing at all.
 
 **Grouping** is derived, not configured: insert a header row whenever the primary sort key's value changes. It is therefore only meaningful when the chain starts with the grouped field. Sorting by duration switches grouping off automatically.
