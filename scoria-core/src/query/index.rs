@@ -29,11 +29,11 @@
 //! cache to invalidate: SQLite remains the durable store and the full-text
 //! index, and this is a projection of it.
 
-use crate::db::repository::TrackRepository;
+use crate::db::repository::{AlbumRepository, TrackRepository};
 use crate::error::CoreError;
 use crate::event::LibraryDelta;
-use crate::id::TrackId;
-use crate::model::Track;
+use crate::id::{AlbumId, TrackId};
+use crate::model::{Album, Track};
 use std::collections::HashMap;
 
 /// Every track in the library, ready to query.
@@ -41,6 +41,10 @@ use std::collections::HashMap;
 pub struct LibraryIndex {
     tracks: Vec<Track>,
     positions: HashMap<TrackId, usize>,
+    /// Albums by id, so anything needing one -- the artwork cache, a pane
+    /// heading -- can have it without a query. A frontend asks for these while
+    /// drawing, and drawing happens every frame.
+    albums: HashMap<AlbumId, Album>,
 }
 
 impl LibraryIndex {
@@ -49,14 +53,31 @@ impl LibraryIndex {
     /// # Errors
     ///
     /// [`CoreError::Database`] if storage fails.
-    pub fn load<R: TrackRepository>(repository: &R) -> Result<Self, CoreError> {
-        Ok(Self::from_tracks(repository.all_tracks()?))
+    pub fn load<R: TrackRepository + AlbumRepository>(repository: &R) -> Result<Self, CoreError> {
+        Ok(Self::from_parts(
+            repository.all_tracks()?,
+            repository.all_albums()?,
+        ))
     }
 
     #[must_use]
-    pub fn from_tracks(tracks: Vec<Track>) -> Self {
+    pub fn from_parts(tracks: Vec<Track>, albums: Vec<Album>) -> Self {
         let positions = tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
-        Self { tracks, positions }
+        let albums = albums.into_iter().map(|a| (a.id, a)).collect();
+        Self {
+            tracks,
+            positions,
+            albums,
+        }
+    }
+
+    #[must_use]
+    pub fn album(&self, id: AlbumId) -> Option<&Album> {
+        self.albums.get(&id)
+    }
+
+    pub fn albums(&self) -> impl Iterator<Item = &Album> {
+        self.albums.values()
     }
 
     #[must_use]
@@ -100,7 +121,7 @@ impl LibraryIndex {
     /// # Errors
     ///
     /// [`CoreError::Database`] if storage fails.
-    pub fn apply<R: TrackRepository>(
+    pub fn apply<R: TrackRepository + AlbumRepository>(
         &mut self,
         repository: &R,
         delta: &LibraryDelta,

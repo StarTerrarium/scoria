@@ -12,7 +12,7 @@ use crate::db::repository::{AlbumRepository, NewAlbum, NewTrack, TrackRepository
 use crate::error::CoreError;
 use crate::event::LibraryDelta;
 use crate::id::{AlbumId, TrackId};
-use crate::library::artwork::{self, ArtworkCache};
+use crate::library::artwork::{self, ArtworkCache, ArtworkKey};
 use crate::library::identity::AlbumIdentity;
 use crate::library::tags::{self, TrackTags};
 use crate::model::Timestamp;
@@ -44,6 +44,8 @@ pub struct ScanOutcome {
     /// Tracks whose files came back.
     pub now_available: Vec<TrackId>,
     pub albums_removed: usize,
+    /// Cached images dropped because their album is gone.
+    pub artwork_pruned: usize,
     /// Files that could not be read, with the reason. A scan reports these
     /// rather than failing: one corrupt file should not cost you the library.
     pub failed: Vec<(PathBuf, String)>,
@@ -136,6 +138,7 @@ impl<'a> Scanner<'a> {
 
         let mut outcome = ScanOutcome::default();
         let mut albums: HashMap<String, AlbumId> = HashMap::new();
+        let mut artwork_keys: HashSet<ArtworkKey> = HashSet::new();
         let mut artwork_done: HashSet<AlbumId> = HashSet::new();
         let mut seen_paths: HashSet<RelativePath> = HashSet::new();
         let mut batch: Vec<(NewTrack, bool)> = Vec::with_capacity(BATCH);
@@ -160,22 +163,35 @@ impl<'a> Scanner<'a> {
                 }
             };
 
-            let album_id = match self.resolve_album(repository, &mut albums, &relative, &tags) {
-                Ok(id) => id,
-                Err(e) => {
-                    outcome.failed.push((absolute.clone(), e.to_string()));
-                    continue;
-                }
-            };
+            // Resolved before the album row, because the artwork is filed under
+            // the identity rather than under whatever rowid the album lands on.
+            let identity = AlbumIdentity::resolve(
+                tags.musicbrainz_album_id.as_deref(),
+                tags.album_artist.as_deref(),
+                tags.album.as_deref(),
+                tags.date,
+                relative.parent(),
+            );
+            let album_key = ArtworkKey::for_album(&identity);
+            artwork_keys.insert(album_key.clone());
+
+            let album_id =
+                match self.resolve_album(repository, &mut albums, &relative, &tags, identity) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        outcome.failed.push((absolute.clone(), e.to_string()));
+                        continue;
+                    }
+                };
 
             if let Some(cache) = self.artwork
                 && artwork_done.insert(album_id)
-                && !cache.has(album_id)
+                && !cache.has(&album_key)
                 && let Some(found) = artwork::find(absolute)
             {
                 // Artwork is a nicety; failing to cache it must not cost the
                 // track that carried it.
-                if let Err(e) = cache.store(album_id, &found) {
+                if let Err(e) = cache.store(&album_key, &found) {
                     outcome.failed.push((absolute.clone(), e.to_string()));
                 }
             }
@@ -217,6 +233,12 @@ impl<'a> Scanner<'a> {
             .collect();
 
         outcome.albums_removed = repository.remove_empty_albums()?;
+
+        // The cache mirrors the library: art for albums that are gone goes too,
+        // and so does anything left behind by an older naming scheme.
+        if let Some(cache) = self.artwork {
+            outcome.artwork_pruned = cache.retain(&artwork_keys).unwrap_or(0);
+        }
         progress(ScanProgress {
             seen: files.len(),
             total,
@@ -265,18 +287,11 @@ impl<'a> Scanner<'a> {
         cache: &mut HashMap<String, AlbumId>,
         relative: &RelativePath,
         tags: &TrackTags,
+        identity: AlbumIdentity,
     ) -> Result<AlbumId, CoreError>
     where
         R: AlbumRepository,
     {
-        let identity = AlbumIdentity::resolve(
-            tags.musicbrainz_album_id.as_deref(),
-            tags.album_artist.as_deref(),
-            tags.album.as_deref(),
-            tags.date,
-            relative.parent(),
-        );
-
         // Every track of an album resolves to the same identity, so caching by
         // key turns one database round trip per file into one per album.
         let key = identity.key();

@@ -137,6 +137,12 @@ impl Track {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Album {
     pub id: AlbumId,
+    /// The §4.2 identity this album resolved to, as stored.
+    ///
+    /// Carried on the record because things outside the database key on it --
+    /// the artwork cache most of all, which must survive the rowid above being
+    /// reassigned by a rebuild.
+    pub identity: String,
     pub title: String,
     pub album_artist: String,
     pub album_artist_sort: Option<String>,

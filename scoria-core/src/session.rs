@@ -16,7 +16,8 @@ use crate::db::repository::TrackRepository;
 use crate::db::sqlite::SqliteDatabase;
 use crate::error::CoreError;
 use crate::event::{Event, LibraryDelta};
-use crate::id::{QueryId, TrackId};
+use crate::id::{AlbumId, QueryId, TrackId};
+use crate::library::artwork::ArtworkKey;
 use crate::library::scanner::{ScanOutcome, ScanProgress, Scanner};
 use crate::library::{ArtworkCache, LibraryWatcher};
 use crate::playback::backend::AudioBackend;
@@ -115,6 +116,19 @@ impl Session {
     #[must_use]
     pub fn artwork(&self) -> &ArtworkCache {
         &self.artwork
+    }
+
+    /// The cached artwork for an album, if there is any.
+    ///
+    /// Goes through the album's identity rather than its id, which is the whole
+    /// point: an id is a rowid and is reassigned when the database is rebuilt,
+    /// so art filed under one would resurface attached to whichever album
+    /// inherited the number. Resolved from the in-memory index, because a
+    /// frontend asks for this while drawing.
+    #[must_use]
+    pub fn artwork_for(&self, album: AlbumId) -> Option<PathBuf> {
+        let album = self.index.album(album)?;
+        self.artwork.get(&ArtworkKey::from_stored(&album.identity))
     }
 
     #[must_use]

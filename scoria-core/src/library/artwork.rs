@@ -17,8 +17,9 @@
 //! find the picture again, which is the expensive half.
 
 use crate::error::CoreError;
-use crate::id::AlbumId;
+use crate::library::identity::AlbumIdentity;
 use lofty::file::TaggedFileExt;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Sidecar filenames, in the order they are preferred.
@@ -106,7 +107,65 @@ fn extension_for(mime: Option<&lofty::picture::MimeType>) -> &'static str {
     }
 }
 
-/// Artwork stored on disk, keyed by album.
+/// What a cached image is filed under.
+///
+/// Derived from the album's *identity* (§4.2), not from its database id.
+///
+/// An id is a rowid, and rowids are reassigned whenever the database is rebuilt
+/// -- something that happens after a corruption, a schema change, or anyone
+/// deleting a file they were told is derived data. Art keyed by rowid survives
+/// that rebuild attached to whatever album inherits the number, which shows the
+/// wrong cover with no error anywhere. Identity is stable by construction: it
+/// is what makes two files the same record in the first place.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ArtworkKey(String);
+
+impl ArtworkKey {
+    /// Hashes an album identity into something filename-safe.
+    ///
+    /// FNV-1a rather than `DefaultHasher`: the standard library makes no
+    /// promise that its hashes are the same between releases, and a cache whose
+    /// filenames change under a compiler upgrade is a cache that silently
+    /// empties itself.
+    #[must_use]
+    pub fn for_album(identity: &AlbumIdentity) -> Self {
+        Self(Self::hash(&identity.key()))
+    }
+
+    fn hash(text: &str) -> String {
+        const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        let mut hash = OFFSET;
+        for byte in text.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+        format!("{hash:016x}")
+    }
+
+    /// Rebuilds the key from an identity string already in storage.
+    ///
+    /// The `albums` table keeps the identity verbatim, so a lookup does not
+    /// have to reconstruct an [`AlbumIdentity`] from its parts.
+    #[must_use]
+    pub fn from_stored(identity_key: &str) -> Self {
+        Self(Self::hash(identity_key))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ArtworkKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Artwork stored on disk, keyed by album identity.
 ///
 /// Everything here is derived data. Deleting the directory costs a rescan of
 /// the artwork and nothing else, which is why it lives under the cache
@@ -131,7 +190,7 @@ impl ArtworkCache {
 
     /// The cached image for an album, if one has been stored.
     #[must_use]
-    pub fn get(&self, album: AlbumId) -> Option<PathBuf> {
+    pub fn get(&self, album: &ArtworkKey) -> Option<PathBuf> {
         SIDECAR_EXTENSIONS
             .iter()
             .map(|extension| self.directory.join(format!("{album}.{extension}")))
@@ -139,7 +198,7 @@ impl ArtworkCache {
     }
 
     #[must_use]
-    pub fn has(&self, album: AlbumId) -> bool {
+    pub fn has(&self, album: &ArtworkKey) -> bool {
         self.get(album).is_some()
     }
 
@@ -148,7 +207,7 @@ impl ArtworkCache {
     /// # Errors
     ///
     /// [`CoreError::Database`] if the cache directory cannot be written.
-    pub fn store(&self, album: AlbumId, artwork: &Artwork) -> Result<PathBuf, CoreError> {
+    pub fn store(&self, album: &ArtworkKey, artwork: &Artwork) -> Result<PathBuf, CoreError> {
         std::fs::create_dir_all(&self.directory).map_err(|e| {
             CoreError::Database(format!("cannot create {}: {e}", self.directory.display()))
         })?;
@@ -184,12 +243,51 @@ impl ArtworkCache {
         Ok(destination)
     }
 
+    /// Removes anything not belonging to one of `keep`.
+    ///
+    /// Run at the end of a scan, so the cache mirrors the library: art for
+    /// albums that no longer exist goes, and so does anything left by an older
+    /// naming scheme. Derived data that only ever grows is a leak.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Database`] if the directory cannot be read or a file cannot
+    /// be removed.
+    pub fn retain(&self, keep: &HashSet<ArtworkKey>) -> Result<usize, CoreError> {
+        let entries = match std::fs::read_dir(&self.directory) {
+            Ok(entries) => entries,
+            // Nothing cached yet is not a failure to prune.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => {
+                return Err(CoreError::Database(format!(
+                    "cannot read {}: {e}",
+                    self.directory.display()
+                )));
+            }
+        };
+
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if keep.contains(&ArtworkKey(stem.to_owned())) {
+                continue;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     /// Drops any cached artwork for an album.
     ///
     /// # Errors
     ///
     /// [`CoreError::Database`] if a cached file exists but cannot be removed.
-    pub fn forget(&self, album: AlbumId) -> Result<(), CoreError> {
+    pub fn forget(&self, album: &ArtworkKey) -> Result<(), CoreError> {
         for extension in SIDECAR_EXTENSIONS {
             let path = self.directory.join(format!("{album}.{extension}"));
             match std::fs::remove_file(&path) {

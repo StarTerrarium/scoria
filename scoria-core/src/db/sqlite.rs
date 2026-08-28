@@ -166,6 +166,7 @@ fn read_album(row: &Row<'_>) -> Result<Album, CoreError> {
     let map = |e: rusqlite::Error| CoreError::Database(format!("cannot read album row: {e}"));
     Ok(Album {
         id: AlbumId(row.get::<_, i64>("id").map_err(map)?.cast_unsigned()),
+        identity: row.get("identity").map_err(map)?,
         title: row.get("title").map_err(map)?,
         album_artist: row.get("album_artist").map_err(map)?,
         album_artist_sort: row.get("album_artist_sort").map_err(map)?,

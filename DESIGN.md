@@ -245,7 +245,11 @@ Extracted at scan time, not on demand, because the transport bar wants a thumbna
 
 Precedence: the embedded picture first, then a sidecar in the album directory (`cover.*`, `folder.*`, `front.*`). Embedded wins because it travels with the file and is what Picard writes.
 
-Artwork is cached under `$XDG_CACHE_HOME/scoria/artwork/` keyed by `AlbumId`, stored **exactly as it was found**. Nothing is rescaled.
+Artwork is cached under `$XDG_CACHE_HOME/scoria/artwork/` and stored **exactly as it was found**. Nothing is rescaled.
+
+**It is keyed by the album's identity (§4.2), never by its id.** An `AlbumId` is a database rowid, and rowids are reassigned whenever the database is rebuilt -- after a corruption, a schema change, or anyone deleting a file they were correctly told is derived data. Art filed under a rowid survives that rebuild attached to whatever album inherits the number, which shows the wrong cover with no error anywhere to explain it. Identity is stable by construction: it is what makes two files the same record in the first place.
+
+A scan prunes anything not belonging to an album that still exists, so the cache mirrors the library rather than only growing.
 
 Rescaling would need an image codec dependency and would buy nothing: artwork always follows what is playing (§9.1), so at most one image is on screen at a time. There is no album grid in this design, and a grid is what would make a thumbnail pipeline worth its weight. The renderer scales one image when it draws it. What the cache does buy is not having to open and parse an audio file to find the picture again, which is the expensive half.
 

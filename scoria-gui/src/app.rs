@@ -898,7 +898,7 @@ impl App {
         let now_playing = self.playing.and_then(|id| self.track(id));
         let transport_view = transport::TransportView {
             track: now_playing,
-            artwork: now_playing.and_then(|t| self.session.as_ref()?.artwork().get(t.album_id)),
+            artwork: now_playing.and_then(|t| self.session.as_ref()?.artwork_for(t.album_id)),
             queue_open: self.open_overlay_kind() == Some(Overlay::Queue),
             state: self.state,
             position: self.position,
@@ -1026,7 +1026,7 @@ impl App {
                         .map(|t| t.album_id)
                 });
                 overlays::artwork::view(overlays::artwork::ArtworkView {
-                    image: album.and_then(|id| self.session.as_ref()?.artwork().get(id)),
+                    image: album.and_then(|id| self.session.as_ref()?.artwork_for(id)),
                     caption: album.and_then(|id| self.album_caption(id)),
                     theme: &self.theme,
                 })
@@ -1091,7 +1091,7 @@ impl App {
         let path = self
             .playing
             .and_then(|id| self.track(id))
-            .and_then(|track| self.session.as_ref()?.artwork().get(track.album_id));
+            .and_then(|track| self.session.as_ref()?.artwork_for(track.album_id));
 
         match path {
             Some(path) => iced::widget::image(path)

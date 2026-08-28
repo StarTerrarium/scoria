@@ -16,7 +16,7 @@ use lofty::config::WriteOptions;
 use lofty::prelude::{ItemKey, TagExt};
 use lofty::tag::{Tag, TagType};
 use scoria_core::db::{AlbumRepository, SqliteDatabase, TrackRepository};
-use scoria_core::library::artwork::{self, Artwork, ArtworkCache};
+use scoria_core::library::artwork::{self, Artwork, ArtworkCache, ArtworkKey};
 use scoria_core::library::{ScanProgress, Scanner, tags};
 use scoria_core::query::sort::{SortChain, SortPreset};
 use std::path::{Path, PathBuf};
@@ -330,8 +330,10 @@ fn a_sidecar_cover_is_found_and_cached() {
         .scan(&mut db, &mut |_| {})
         .unwrap();
 
-    let album = db.all_albums().unwrap()[0].id;
-    let cached = cache.get(album).expect("artwork should be cached");
+    let album = &db.all_albums().unwrap()[0];
+    let cached = cache
+        .get(&ArtworkKey::from_stored(&album.identity))
+        .expect("artwork should be cached");
     assert_eq!(std::fs::read(cached).unwrap(), b"pretend jpeg");
 }
 
@@ -370,18 +372,18 @@ fn an_album_without_artwork_simply_has_none() {
         .scan(&mut db, &mut |_| {})
         .unwrap();
 
-    let album = db.all_albums().unwrap()[0].id;
-    assert!(!cache.has(album));
+    let album = &db.all_albums().unwrap()[0];
+    assert!(!cache.has(&ArtworkKey::from_stored(&album.identity)));
 }
 
 #[test]
 fn replacing_artwork_does_not_leave_the_old_file_behind() {
     let cache = ArtworkCache::new(scratch("artwork-replace").join("art"));
-    let album = scoria_core::AlbumId(1);
+    let key = ArtworkKey::from_stored("some-album-identity");
 
     cache
         .store(
-            album,
+            &key,
             &Artwork::Embedded {
                 data: b"png".to_vec(),
                 extension: "png",
@@ -390,7 +392,7 @@ fn replacing_artwork_does_not_leave_the_old_file_behind() {
         .unwrap();
     cache
         .store(
-            album,
+            &key,
             &Artwork::Embedded {
                 data: b"jpg".to_vec(),
                 extension: "jpg",
@@ -399,10 +401,79 @@ fn replacing_artwork_does_not_leave_the_old_file_behind() {
         .unwrap();
 
     assert!(
-        !cache.directory().join("1.png").exists(),
+        !cache.directory().join(format!("{key}.png")).exists(),
         "stale artwork left behind"
     );
-    assert_eq!(std::fs::read(cache.get(album).unwrap()).unwrap(), b"jpg");
+    assert_eq!(std::fs::read(cache.get(&key).unwrap()).unwrap(), b"jpg");
+}
+
+#[test]
+fn artwork_survives_the_database_being_rebuilt() {
+    // The hazard this keying exists for. An album id is a rowid, and a rebuild
+    // reassigns them -- art filed under one would resurface attached to
+    // whichever album inherited the number. Identity does not move.
+    let root = scratch("artwork-rebuild");
+    write_track(
+        &root,
+        "artist/album/01.flac",
+        &[
+            (ItemKey::AlbumArtist, "Artist"),
+            (ItemKey::AlbumTitle, "Album"),
+        ],
+    );
+    std::fs::write(root.join("artist/album/cover.jpg"), b"the right cover").unwrap();
+    let cache = ArtworkCache::new(scratch("artwork-rebuild-cache").join("art"));
+
+    let mut first = db();
+    Scanner::new(&root)
+        .with_artwork(&cache)
+        .scan(&mut first, &mut |_| {})
+        .unwrap();
+    let before = first.all_albums().unwrap()[0].clone();
+
+    // A second, entirely separate database: every rowid is assigned afresh.
+    let mut second = db();
+    Scanner::new(&root)
+        .with_artwork(&cache)
+        .scan(&mut second, &mut |_| {})
+        .unwrap();
+    let after = second.all_albums().unwrap()[0].clone();
+
+    assert_eq!(before.identity, after.identity, "identity should not move");
+    let art = cache
+        .get(&ArtworkKey::from_stored(&after.identity))
+        .expect("artwork should still be found");
+    assert_eq!(std::fs::read(art).unwrap(), b"the right cover");
+}
+
+#[test]
+fn artwork_for_an_album_that_is_gone_is_pruned() {
+    // Derived data that only ever grows is a leak, and stale entries are also
+    // what would let an old naming scheme linger.
+    let root = scratch("artwork-prune");
+    write_track(
+        &root,
+        "artist/album/01.flac",
+        &[(ItemKey::AlbumTitle, "Album")],
+    );
+    std::fs::write(root.join("artist/album/cover.jpg"), b"art").unwrap();
+    let cache = ArtworkCache::new(scratch("artwork-prune-cache").join("art"));
+
+    let mut db = db();
+    Scanner::new(&root)
+        .with_artwork(&cache)
+        .scan(&mut db, &mut |_| {})
+        .unwrap();
+
+    // Something from a scheme this cache no longer uses.
+    std::fs::write(cache.directory().join("7.jpg"), b"stale").unwrap();
+
+    let outcome = Scanner::new(&root)
+        .with_artwork(&cache)
+        .scan(&mut db, &mut |_| {})
+        .unwrap();
+    assert_eq!(outcome.artwork_pruned, 1);
+    assert!(!cache.directory().join("7.jpg").exists());
 }
 
 // --------------------------------------------------------- scan then query --
