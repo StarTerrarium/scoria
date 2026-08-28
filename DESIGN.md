@@ -367,6 +367,10 @@ Album artist → Album. Each pane has `All (n)` pinned at the top, and counts ar
 
 Every row's count sums to that pane's `All (n)`. That is the contract a pane makes by existing, and it is exactly the contract a genre pane cannot keep.
 
+**A filter is always visible and always dismissible, in every placement.** Filters survive a change of `BrowserPlacement`, which is deliberate -- narrowing to an album and then switching to `Off` for the extra table width is a reasonable thing to do. But `Off` has no panes, so `All (n)` is not reachable from it, and without something else the view would be filtered with no way to say so or undo it. The header states the active filter and dismisses it on click; Escape does the same from the keyboard.
+
+Search is not part of that summary. It has its own field in every placement and clears itself.
+
 **No genre pane.** Genre is many-valued per track; Picard writes multiple genre tags from MusicBrainz, so a track can legitimately be several genres at once. A filter pane implies its rows partition the library. Either the counts stop adding to `All`, or we invent a primary-genre rule that is not in the tags. That is a broken contract, not merely a noisy list, and it stays broken in a library tagged only with generic genres.
 
 ### 7.3 The track table
@@ -432,7 +436,7 @@ Tooltips only solve discovery for mouse users, and this is a keyboard-navigable 
 One family, one set of rules. Four overlays with three dismissal behaviours would be its own configuration burden.
 
 - One at a time, never stacked.
-- Escape closes. The key that opened it toggles it.
+- Escape closes. The key that opened it toggles it. With no overlay open, Escape clears the filters instead (§7.2) -- one key backing out of whatever is currently narrowing the view, rather than two bindings competing for it.
 - Anything wanting to be a second simultaneous overlay is a pane, and panes are banned.
 
 ### 9.1 Artwork

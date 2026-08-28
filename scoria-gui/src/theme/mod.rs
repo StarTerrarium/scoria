@@ -292,6 +292,28 @@ impl Theme {
         }
     }
 
+    /// The dismissible filter chip in the header.
+    ///
+    /// Reads as a thing you can act on rather than a label: bordered in the
+    /// accent, and brightening on hover.
+    #[must_use]
+    pub fn chip_button(&self, status: button::Status) -> button::Style {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let tint = if hovered { 0.30 } else { 0.18 };
+        button::Style {
+            background: Some(Background::Color(colour(
+                self.roles.background.mix(self.roles.accent, tint),
+            ))),
+            text_color: colour(self.roles.text),
+            border: Border {
+                color: colour(self.roles.accent),
+                width: 1.0,
+                radius: border::radius(3),
+            },
+            ..button::Style::default()
+        }
+    }
+
     #[must_use]
     pub fn rule_style(&self) -> rule::Style {
         rule::Style {

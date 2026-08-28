@@ -205,7 +205,7 @@ impl Keymap {
             Binding::new(T::Char('j'), Mods::CTRL, A::JumpToPlaying),
             Binding::new(T::Char('q'), Mods::CTRL, A::ToggleQueue),
             // Overlays. §9: escape closes, and the key that opened it toggles.
-            Binding::new(T::Escape, Mods::NONE, A::CloseOverlay),
+            Binding::new(T::Escape, Mods::NONE, A::Dismiss),
             Binding::new(T::Char('?'), Mods::NONE, A::ToggleHelp),
             Binding::new(T::Char('/'), Mods::NONE, A::FocusSearch),
             Binding::new(T::Function(1), Mods::NONE, A::ToggleHelp),
@@ -321,6 +321,16 @@ mod tests {
                 "{action:?} cannot be reached from the keyboard"
             );
         }
+    }
+
+    #[test]
+    fn there_is_a_way_out_of_a_filter_from_the_keyboard() {
+        // Filters survive a layout change and `Off` shows no panes, so without
+        // this there is a state that can be entered and not left.
+        assert_eq!(
+            Keymap::standard().resolve(&Trigger::Escape, Mods::NONE),
+            Some(Action::Dismiss)
+        );
     }
 
     #[test]

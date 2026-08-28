@@ -46,7 +46,17 @@ pub enum Action {
     // Overlays (§9). One at a time, escape closes, the opening key toggles.
     ToggleQueue,
     ToggleHelp,
-    CloseOverlay,
+    /// Back out of whatever is currently narrowing the view.
+    ///
+    /// One action with a precedence rather than two bindings competing for
+    /// Escape: close the overlay if one is open, otherwise clear the filters.
+    /// That is how Escape behaves everywhere else, and it means the key always
+    /// does the least surprising thing available.
+    ///
+    /// The filter half matters because filters survive a layout change, and
+    /// `Off` shows no panes -- without this there is a state you can enter and
+    /// not leave.
+    Dismiss,
 }
 
 impl Action {
@@ -73,7 +83,7 @@ impl Action {
             Self::FocusSearch,
             Self::ToggleQueue,
             Self::ToggleHelp,
-            Self::CloseOverlay,
+            Self::Dismiss,
         ]
     }
 
@@ -100,7 +110,7 @@ impl Action {
             Self::FocusSearch => "Search",
             Self::ToggleQueue => "Show the queue",
             Self::ToggleHelp => "Show this list",
-            Self::CloseOverlay => "Close",
+            Self::Dismiss => "Close, or clear the filters",
         }
     }
 }

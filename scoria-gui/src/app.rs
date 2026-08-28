@@ -12,7 +12,7 @@ use crate::keymap::{Action, Keymap};
 use crate::layouts::{self, Browser, BrowserPlacement};
 use crate::theme::Theme;
 use crate::widgets::{panes, table, transport};
-use iced::widget::{container, row, text, text_input};
+use iced::widget::{button, container, row, text, text_input};
 use iced::{Element, Fill, Length, Subscription, Task};
 use scoria_core::command::Command;
 use scoria_core::config::Paths;
@@ -49,6 +49,7 @@ pub enum Message {
     Transport(transport::Event),
     ArtistPane(panes::Event),
     AlbumPane(panes::Event),
+    ClearFilters,
     SearchChanged(String),
     /// A key press, already resolved through the keymap.
     Action(Action),
@@ -221,6 +222,7 @@ impl App {
                 self.scroll_offset = 0.0;
                 self.refresh();
             }
+            Message::ClearFilters => self.clear_filters(),
             Message::ArtistPane(event) => self.on_artist_pane(event),
             Message::AlbumPane(event) => self.on_album_pane(event),
             Message::Action(action) => return self.on_action(action),
@@ -320,6 +322,50 @@ impl App {
         }
     }
 
+    /// Drops every pane filter.
+    ///
+    /// Reachable from the chip in the header and from Escape, and both matter:
+    /// filters survive a layout change, and `Off` shows no panes, so without a
+    /// way out that does not involve the panes there is a state you can enter
+    /// and not leave. The search box is left alone -- it is visible in every
+    /// placement and clears itself.
+    fn clear_filters(&mut self) {
+        if self.selection.album_artists.is_empty() && self.selection.albums.is_empty() {
+            return;
+        }
+        self.selection.album_artists.clear();
+        self.selection.albums.clear();
+        self.reset_view();
+    }
+
+    /// What the panes are currently narrowing to, if anything.
+    ///
+    /// Search is deliberately excluded: it has its own visible field in every
+    /// placement, so restating it here would be noise.
+    fn filter_summary(&self) -> Option<String> {
+        let artists = &self.selection.album_artists;
+        let albums: Vec<&str> = self
+            .albums
+            .iter()
+            .filter(|(id, _)| self.selection.albums.contains(id))
+            .map(|(_, row)| row.label.as_str())
+            .collect();
+
+        if artists.is_empty() && albums.is_empty() {
+            return None;
+        }
+
+        // Read in cascade order, which is the order they were chosen in.
+        let mut parts: Vec<String> = Vec::new();
+        if !artists.is_empty() {
+            parts.push(artists.join(", "));
+        }
+        if !albums.is_empty() {
+            parts.push(albums.join(", "));
+        }
+        Some(parts.join(" › "))
+    }
+
     /// Re-runs the query and returns the table to the top.
     ///
     /// Keeping the old scroll position after a filter change would leave the
@@ -407,7 +453,9 @@ impl App {
                 return iced::widget::operation::focus(iced::widget::Id::new(SEARCH_ID));
             }
             // Overlays arrive at M9.
-            Action::ToggleQueue | Action::ToggleHelp | Action::CloseOverlay => {}
+            // Overlays arrive at M9; until then Escape only has the one job.
+            Action::ToggleQueue | Action::ToggleHelp => {}
+            Action::Dismiss => self.clear_filters(),
         }
         Task::none()
     }
@@ -559,23 +607,37 @@ impl App {
         };
 
         let muted = self.theme.text_style(self.theme.muted_colour());
-        let search = container(
-            row![
-                text_input("Search", &self.search)
-                    .id(iced::widget::Id::new(SEARCH_ID))
-                    .on_input(Message::SearchChanged)
-                    .padding(4)
-                    .size(13)
-                    .width(Length::Fixed(320.0)),
-                text(self.status.clone())
-                    .size(12)
-                    .style(move |_t: &Theme| muted),
-            ]
-            .spacing(10)
-            .align_y(iced::Alignment::Center),
-        )
-        .padding([6, 10])
-        .width(Fill);
+        let mut header = row![
+            text_input("Search", &self.search)
+                .id(iced::widget::Id::new(SEARCH_ID))
+                .on_input(Message::SearchChanged)
+                .padding(4)
+                .size(13)
+                .width(Length::Fixed(320.0)),
+            text(self.status.clone())
+                .size(12)
+                .style(move |_t: &Theme| muted),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center);
+
+        // The filter, stated and dismissible, in every placement. `Off` shows
+        // no panes, so this is the only thing standing between a filtered view
+        // and a dead end.
+        if let Some(summary) = self.filter_summary() {
+            header = header.push(
+                button(
+                    row![text(summary).size(12), text("✕").size(12)]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center),
+                )
+                .padding([2, 8])
+                .on_press(Message::ClearFilters)
+                .style(|t: &Theme, status| t.chip_button(status)),
+            );
+        }
+
+        let search = container(header).padding([6, 10]).width(Fill);
 
         // Built only when a placement will use it: `Off` shows no panes, and
         // constructing them would be work thrown away every frame.
