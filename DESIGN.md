@@ -519,7 +519,7 @@ Tag editing is post-1.0 and lands here. An editor needs a save/cancel boundary, 
 
 ### 9.4 Settings
 
-A drawer like the others, under §9's rules. Not yet built.
+A drawer like the others, under §9's rules.
 
 **What belongs here is what has nowhere else to live.** Several settings already have a natural home and stay there: columns and the sort preset are configured from the header they affect, browser placement is a keystroke, drawer heights are dragged. A setting edited where it applies needs no screen, and moving those here would make them harder to find, not easier.
 
@@ -528,6 +528,10 @@ That leaves the ones with no natural place, which is what this drawer is for:
 - **Library root** (§5.1). Also the first-run picker: the same screen, reached differently.
 - **Play behaviour** (§6.3). §6.3 calls it "the one user-facing option" in the playback model, and it currently has no interface at all.
 - **Theme** (§11). 1.0 ships a curated handful; picking between them is a list.
+
+It also shows two things that are not settings but have no other home: where the settings file, database and artwork cache live, and what fraction of the library carries ReplayGain tags. The second matters because §6.7 is only as good as the tagging, and a partly tagged library sounds uneven for a reason nothing else in the application would ever explain.
+
+Choosing the library root uses the desktop's own folder picker, and points the watcher at the new root rather than scanning inline -- the catch-up scan every watch performs on start does the work, on the scan thread, where nobody waits for it.
 
 Post-1.0 additions land here too: a ReplayGain toggle (§6.7), and whatever tag editing needs that the properties dialog does not own.
 

@@ -11,6 +11,7 @@ authors.workspace = true
 scoria-core.workspace = true
 iced.workspace = true
 image.workspace = true
+rfd.workspace = true
 serde.workspace = true
 anyhow.workspace = true
 

@@ -54,6 +54,8 @@ pub enum Action {
     ToggleQueue,
     /// Column visibility, order and the sort presets (§7.3).
     ToggleColumns,
+    /// The settings with nowhere else to live (§9.4).
+    ToggleSettings,
     /// A metadata dump for the selected track (§9.3).
     ShowProperties,
     ToggleHelp,
@@ -73,7 +75,7 @@ pub enum Action {
 impl Action {
     /// Every action, so a keymap can be checked for gaps.
     #[must_use]
-    pub const fn all() -> [Self; 23] {
+    pub const fn all() -> [Self; 24] {
         [
             Self::MoveUp,
             Self::MoveDown,
@@ -95,6 +97,7 @@ impl Action {
             Self::FocusSearch,
             Self::ToggleQueue,
             Self::ToggleColumns,
+            Self::ToggleSettings,
             Self::ShowProperties,
             Self::ToggleHelp,
             Self::Dismiss,
@@ -125,6 +128,7 @@ impl Action {
             Self::FocusSearch => "Search",
             Self::ToggleQueue => "Show the queue",
             Self::ToggleColumns => "Columns and sorting",
+            Self::ToggleSettings => "Settings",
             Self::ShowProperties => "Show track metadata",
             Self::ToggleHelp => "Show this list",
             Self::Dismiss => "Close, or clear the filters",

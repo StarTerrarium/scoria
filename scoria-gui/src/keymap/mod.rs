@@ -208,6 +208,7 @@ impl Keymap {
             Binding::new(T::Char('i'), Mods::CTRL, A::ShowProperties),
             // Where applications put their settings.
             Binding::new(T::Char(','), Mods::CTRL, A::ToggleColumns),
+            Binding::new(T::Char(';'), Mods::CTRL, A::ToggleSettings),
             // Overlays. §9: escape closes, and the key that opened it toggles.
             Binding::new(T::Escape, Mods::NONE, A::Dismiss),
             Binding::new(T::Char('?'), Mods::NONE, A::ToggleHelp),

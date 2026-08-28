@@ -59,6 +59,9 @@ pub enum Message {
     DrawerDragEnd,
     Queue(table::Event),
     Columns(overlays::columns::Event),
+    Settings(overlays::settings::Event),
+    /// The folder picker finished. `None` means it was cancelled.
+    RootChosen(Option<std::path::PathBuf>),
     CloseOverlay,
     SearchChanged(String),
     /// A key press, already resolved through the keymap.
@@ -336,6 +339,8 @@ impl App {
             }
             Message::Queue(event) => return self.on_queue(event),
             Message::Columns(event) => self.on_columns(event),
+            Message::Settings(event) => return self.on_settings(event),
+            Message::RootChosen(root) => self.set_root(root),
             Message::CloseOverlay => self.set_overlay(None),
             Message::ArtistPane(event) => self.on_artist_pane(event),
             Message::AlbumPane(event) => self.on_album_pane(event),
@@ -472,6 +477,80 @@ impl App {
                 // hundreds of events and one outcome.
                 self.persist();
             }
+        }
+    }
+
+    /// How many tracks carry ReplayGain tags (§6.7).
+    fn gain_tagged(&self) -> usize {
+        self.session.as_ref().map_or(0, |session| {
+            session
+                .index()
+                .tracks()
+                .iter()
+                .filter(|t| t.replay_gain.is_tagged())
+                .count()
+        })
+    }
+
+    /// The settings drawer (§9.4).
+    fn on_settings(&mut self, event: overlays::settings::Event) -> Task<Message> {
+        use overlays::settings::Event as E;
+        match event {
+            E::ChooseRoot => {
+                // The picker is a separate process talking to the desktop
+                // portal, so it is awaited off the UI thread rather than
+                // blocking the window for as long as someone browses.
+                let start = self.session.as_ref().and_then(|s| s.config().root.clone());
+                return Task::perform(
+                    async move {
+                        let mut dialog = rfd::AsyncFileDialog::new().set_title("Music library");
+                        if let Some(start) = start {
+                            dialog = dialog.set_directory(start);
+                        }
+                        dialog
+                            .pick_folder()
+                            .await
+                            .map(|handle| handle.path().to_path_buf())
+                    },
+                    Message::RootChosen,
+                );
+            }
+            E::SetPlayBehaviour(behaviour) => {
+                if let Some(session) = &mut self.session
+                    && let Err(e) = session.set_play_behaviour(behaviour)
+                {
+                    self.status = format!("{e}");
+                }
+            }
+            E::ChooseTheme(name) => {
+                self.theme = Theme::all()
+                    .into_iter()
+                    .find(|t| t.name == name)
+                    .unwrap_or_default();
+                self.settings.theme = self.theme.name.clone();
+                self.persist();
+            }
+            E::Rescan => match self.session.as_ref().map(Session::request_rescan) {
+                Some(Ok(())) => self.status = "rescanning…".to_owned(),
+                Some(Err(e)) => self.status = format!("{e}"),
+                None => {}
+            },
+        }
+        Task::none()
+    }
+
+    /// Points the library somewhere else and starts watching it.
+    fn set_root(&mut self, root: Option<std::path::PathBuf>) {
+        let Some(root) = root else { return };
+        let Some(session) = &mut self.session else {
+            return;
+        };
+
+        match session.set_root(root) {
+            // Watching restarts against the new root, and the catch-up scan it
+            // performs does the indexing on the scan thread.
+            Ok(()) => self.status = "scanning the new library…".to_owned(),
+            Err(e) => self.status = format!("{e}"),
         }
     }
 
@@ -925,6 +1004,7 @@ impl App {
             // Overlays arrive at M9.
             Action::ToggleQueue => return self.open_overlay(Overlay::Queue),
             Action::ToggleColumns => return self.open_overlay(Overlay::Columns),
+            Action::ToggleSettings => return self.open_overlay(Overlay::Settings),
             Action::ShowProperties => {
                 if let Some(id) = self.cursor.and_then(|index| self.rows.get(index).copied()) {
                     return self.open_overlay(Overlay::Properties(id));
@@ -1279,6 +1359,25 @@ impl App {
 
     fn overlay_content(&self, overlay: Overlay) -> Element<'_, Message, Theme> {
         match overlay {
+            Overlay::Settings => overlays::settings::view(
+                overlays::settings::SettingsView {
+                    root: self.session.as_ref().and_then(|s| s.config().root.clone()),
+                    play_behaviour: self
+                        .session
+                        .as_ref()
+                        .map_or(scoria_core::PlayBehaviour::WhatsShown, |s| {
+                            s.config().play_behaviour
+                        }),
+                    theme_name: &self.theme.name,
+                    config_file: self.paths.config_file(),
+                    database: self.paths.database(),
+                    artwork_cache: self.paths.artwork_cache(),
+                    gain_tagged: self.gain_tagged(),
+                    track_count: self.session.as_ref().map_or(0, |s| s.index().len()),
+                    theme: &self.theme,
+                },
+                Message::Settings,
+            ),
             Overlay::Columns => overlays::columns::view(
                 overlays::columns::ColumnsView {
                     layout: &self.settings.columns,

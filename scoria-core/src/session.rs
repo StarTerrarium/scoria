@@ -522,16 +522,39 @@ impl Session {
         Ok(outcome)
     }
 
-    /// Points the library at a new root and rescans.
+    /// Points the library at a new root.
+    ///
+    /// Does not scan inline. If watching is running it is restarted against the
+    /// new root, and the catch-up scan every watch performs on start does the
+    /// work -- on the scan thread, where a frontend does not wait for it. A
+    /// caller with no watcher running gets the settings change and can
+    /// [`Session::rescan`] itself.
     ///
     /// # Errors
     ///
     /// [`CoreError::Config`] if settings cannot be written, or
-    /// [`CoreError::Database`] if the scan fails.
+    /// [`CoreError::Database`] if watching cannot be restarted.
     pub fn set_root(&mut self, root: PathBuf) -> Result<(), CoreError> {
         self.config.root = Some(root);
         crate::config::save(&self.paths.config_file(), &self.config)?;
-        self.rescan(&mut |_| {}).map(|_| ())
+
+        if self.watcher.is_some() {
+            // Dropping the handle stops the old thread and joins it, so the two
+            // never watch different roots at once.
+            self.watcher = None;
+            self.start_watching()?;
+        }
+        Ok(())
+    }
+
+    /// Records the play behaviour setting (§6.3) and saves it.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Config`] if settings cannot be written.
+    pub fn set_play_behaviour(&mut self, behaviour: PlayBehaviour) -> Result<(), CoreError> {
+        self.config.play_behaviour = behaviour;
+        self.save_config()
     }
 
     /// Persists the current settings.

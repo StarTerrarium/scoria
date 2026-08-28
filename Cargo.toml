@@ -41,6 +41,10 @@ notify = "8"
 # Config file format. Human-editable is a requirement: DESIGN.md 7.3 sends users
 # with exotic sort needs to the config file rather than building them a UI.
 toml = "1"
+# Native folder picker for §5.1's "point me at your library". Defaults to the
+# XDG desktop portal, so no GTK. Nothing replaces it: a picker written by hand
+# would be a worse picker, and a text field is not a picker at all.
+rfd = "0.17"
 
 # Desktop integration.
 souvlaki = "0.8"
