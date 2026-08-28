@@ -30,7 +30,7 @@ These are load-bearing. Changes to features are cheap; changes to these are not.
 
 **The library is first-class.** Playlists are a post-1.0 addition built on top, never the organising concept.
 
-**Dense over pretty.** When information density and visual polish conflict, density wins. The one exception is Playback Mode (§9.4), which is explicitly the other thing.
+**Dense over pretty.** When information density and visual polish conflict, density wins. The one exception is Playback Mode (§9.5), which is explicitly the other thing.
 
 **Configuration tunes defaults; it never constructs the application.** Show/hide a column: yes. Assemble a layout from panes: no. The test is whether the app is fully usable by someone who never opens settings.
 
