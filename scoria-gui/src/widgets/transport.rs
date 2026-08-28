@@ -88,71 +88,34 @@ pub fn view<'a, Message: Clone + 'a>(
     });
 
     let muted = theme.text_style(theme.muted_colour());
-    let now_playing = column![
-        text(title).size(14),
-        text(subtitle).size(12).style(move |_t: &Theme| muted),
-    ]
-    .spacing(1)
-    .width(Fill);
 
     // While dragging, the time reads where the pointer is rather than where
     // playback still is, so the number and the handle agree.
     let shown_position = transport.scrubbing.unwrap_or(transport.position);
-    let elapsed = format_duration(shown_position);
     let duration = transport.track.map_or(Duration::ZERO, |t| t.duration);
-    let total = format_duration(duration);
 
-    let repeat_glyph = match transport.repeat {
-        RepeatMode::Off | RepeatMode::All => "⟳",
-        RepeatMode::One => "⟳¹",
-    };
-
-    let bar = row![
-        artwork,
-        symbol("⏮", "Previous", Event::Previous, false),
-        symbol(
-            match transport.state {
-                PlaybackState::Playing => "⏸",
-                PlaybackState::Paused | PlaybackState::Stopped => "▶",
-            },
-            "Play or pause",
-            Event::PlayPause,
-            false,
-        ),
-        symbol("⏭", "Next", Event::Next, false),
-        symbol("⤨", "Shuffle", Event::ToggleShuffle, transport.shuffled),
-        symbol(
-            repeat_glyph,
-            "Repeat",
-            Event::CycleRepeat,
-            transport.repeat != RepeatMode::Off
-        ),
-        now_playing,
-        // §8: a crosshair, matching the "reveal current item" convention from
-        // editors and file managers.
-        symbol("⌖", "Jump to what is playing", Event::JumpToPlaying, false),
-        text(format!("{elapsed} / {total}"))
-            .size(12)
-            .style(move |_t: &Theme| muted),
-        slider(0.0..=1.0, transport.volume, move |v| on_event(
-            Event::SetVolume(v)
-        ))
-        .step(0.01)
-        .width(Length::Fixed(90.0)),
-    ]
-    .spacing(8)
-    .padding([6, 10])
-    .align_y(Alignment::Center);
-
-    // A full-width bar along the top edge of the transport.
+    // The now-playing block gets a fixed width rather than filling.
     //
-    // Inline between the title and the clock would have been the conventional
-    // placement, but it would compress the one part of the bar that carries
-    // information. Full width also gives the most precision, which is what a
-    // ten-minute track needs. §2: dense over pretty.
+    // Letting it fill was the mistake in the first version: a title and one
+    // subtitle line is about three hundred pixels of content, so filling the
+    // bar left a void in the middle and pushed the clock and volume to the far
+    // edge. Fixed width keeps them where the eye expects and hands the slack to
+    // the seek bar, which is the one control that benefits from every pixel.
+    let now_playing = container(
+        column![
+            text(title).size(14),
+            text(subtitle).size(12).style(move |_t: &Theme| muted),
+        ]
+        .spacing(1),
+    )
+    .width(Length::Fixed(300.0))
+    .clip(true);
+
+    // The seek bar sits between the two times, which is where a clock belongs:
+    // elapsed on the left of the bar it is measuring, total on the right.
     //
     // A track of unknown or zero length gets an inert strip rather than a
-    // movable control: there is nowhere to seek to, and a handle that moves
+    // movable handle. There is nowhere to seek to, and a control that moves
     // without doing anything is worse than one that does not move.
     let seconds = duration.as_secs_f32();
     let seek: Element<'a, Message, Theme> = if seconds > 0.0 {
@@ -170,8 +133,57 @@ pub fn view<'a, Message: Clone + 'a>(
         Space::new().height(Length::Fixed(6.0)).width(Fill).into()
     };
 
+    let time = move |value: String| {
+        container(text(value).size(12).style(move |_t: &Theme| muted))
+            .width(Length::Fixed(44.0))
+            .align_x(Alignment::Center)
+    };
+
+    let bar = row![
+        artwork,
+        symbol("⏮", "Previous", Event::Previous, false),
+        symbol(
+            match transport.state {
+                PlaybackState::Playing => "⏸",
+                PlaybackState::Paused | PlaybackState::Stopped => "▶",
+            },
+            "Play or pause",
+            Event::PlayPause,
+            false,
+        ),
+        symbol("⏭", "Next", Event::Next, false),
+        now_playing,
+        time(format_duration(shown_position)),
+        seek,
+        time(format_duration(duration)),
+        // Shuffle and repeat sit past the seek bar rather than among the
+        // transport buttons: they change what happens next, which is a
+        // different kind of thing from moving through what is playing now.
+        symbol("⇄", "Shuffle", Event::ToggleShuffle, transport.shuffled),
+        symbol(
+            match transport.repeat {
+                RepeatMode::One => "⟳1",
+                RepeatMode::Off | RepeatMode::All => "⟳",
+            },
+            "Repeat",
+            Event::CycleRepeat,
+            transport.repeat != RepeatMode::Off,
+        ),
+        // §8: a crosshair, matching the "reveal current item" convention from
+        // editors and file managers.
+        symbol("⌖", "Jump to what is playing", Event::JumpToPlaying, false),
+        slider(0.0..=1.0, transport.volume, move |v| on_event(
+            Event::SetVolume(v)
+        ))
+        .step(0.01)
+        .width(Length::Fixed(90.0)),
+    ]
+    .spacing(8)
+    .padding([6, 10])
+    .align_y(Alignment::Center);
+
     let style = theme.surface_style();
-    container(column![seek, bar].spacing(2))
+    container(bar)
         .width(Fill)
         .style(move |_t: &Theme| style)
         .into()

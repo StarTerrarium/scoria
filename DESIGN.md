@@ -407,15 +407,19 @@ Always visible, identical across all three layouts.
 
 Contents: a seek bar, then a row of artwork thumbnail, symbol-only transport controls, shuffle and repeat toggles, track title, `artist — album`, jump-to-playing, elapsed/total, volume.
 
-**The seek bar spans the full width, above the controls.** An earlier version of this list omitted it entirely, which was an oversight rather than a decision: `Command::Seek` is in §3.2 and `AudioBackend::seek` is in §3.4, so seeking was implemented end to end with no way to ask for it.
+**The seek bar sits inline, between the two times.** An earlier version of this list omitted it entirely, which was an oversight rather than a decision: `Command::Seek` is in §3.2 and `AudioBackend::seek` is in §3.4, so seeking was implemented end to end with no way to ask for it.
 
-Inline between the title and the clock is the conventional placement and is wrong here, because it compresses the part of the bar that carries information. Full width also gives the most precision, which is what a ten-minute track needs.
+It was first placed full width above the controls, on the reasoning that inline placement would compress the part of the bar carrying information. That reasoning did not survive seeing it: the now-playing block is a title and one subtitle line, so filling the bar with it left a void in the middle and pushed the clock and volume to the far edge. The block now takes a fixed width and the seek bar takes the slack, which is the one control that benefits from every pixel it can get.
+
+Elapsed sits to the left of the bar and total to the right -- a clock either side of the thing it measures.
 
 While it is being dragged, the bar and the elapsed time both show where the pointer is rather than where playback still is; position updates from the engine are ignored until release, or the handle would be pulled back out from under the pointer several times a second.
 
 Position is reported whenever it moves, not once per second. A seek bar moves continuously, and a report per second makes the handle lurch a second's width at a time -- very visible on a short track. The elapsed text still renders whole seconds, so it is unaffected. A track of unknown length gets an inert strip rather than a movable handle, because a control that moves without doing anything is worse than one that does not move.
 
-Symbol buttons only, with hover tooltips. Jump-to-playing uses a crosshair/target glyph, matching the "reveal current item" convention from editors and file managers.
+Shuffle and repeat sit past the seek bar rather than among the transport buttons: they change what happens next, which is a different kind of thing from moving through what is playing now.
+
+Symbol buttons only, with hover tooltips. Glyphs have to be ones a system font actually has -- the first attempt used U+2928 for shuffle, which is neither a shuffle symbol nor present in the default font, and rendered as a cross. Jump-to-playing uses a crosshair/target glyph, matching the "reveal current item" convention from editors and file managers.
 
 Tooltips only solve discovery for mouse users, and this is a keyboard-navigable application. A keybinding cheatsheet on `?` covers the other path.
 
