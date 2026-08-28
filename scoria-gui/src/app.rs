@@ -1298,7 +1298,35 @@ impl App {
             );
         }
 
-        let search = container(header).padding([6, 10]).width(Fill);
+        // Pushed to the right so the buttons sit where chrome is looked for,
+        // and so the chip stays beside the text it qualifies.
+        header = header.push(iced::widget::Space::new().width(Fill));
+
+        // Both of these have keybindings, and a keybinding is not a way in for
+        // anyone who has not been told about it. Words rather than glyphs:
+        // there is room here, and a word cannot fail to render the way a
+        // missing symbol can.
+        for (label, message, open) in [
+            (
+                "Columns",
+                Message::Action(Action::ToggleColumns),
+                self.open_overlay_kind() == Some(Overlay::Columns),
+            ),
+            (
+                "Settings",
+                Message::Action(Action::ToggleSettings),
+                self.open_overlay_kind() == Some(Overlay::Settings),
+            ),
+        ] {
+            header = header.push(
+                button(text(label).size(12))
+                    .padding([3, 10])
+                    .on_press(message)
+                    .style(move |t: &Theme, status| t.transport_button(status, open)),
+            );
+        }
+
+        let search = container(header.spacing(6)).padding([6, 10]).width(Fill);
 
         // Built only when a placement will use it: `Off` shows no panes, and
         // constructing them would be work thrown away every frame.

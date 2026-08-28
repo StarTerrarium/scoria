@@ -468,6 +468,8 @@ Symbol buttons only, with hover tooltips. Glyphs have to be ones a system font a
 
 Tooltips only solve discovery for mouse users, and this is a keyboard-navigable application. A keybinding cheatsheet on `?` covers the other path.
 
+**Everything reachable by a keybinding is also reachable without one.** The keyboard is the fast path for someone who knows it, never the only path: a feature whose sole entry point is a shortcut you have not been told about is a feature nobody finds. The queue, the column panel and the settings drawer all have visible controls as well as keys.
+
 ---
 
 ## 9. Overlays
