@@ -11,7 +11,9 @@
 use crate::keymap::{Action, Keymap};
 use crate::layouts::{self, Browser, BrowserPlacement};
 use crate::overlays::{self, Overlay};
+use crate::settings::Settings;
 use crate::theme::Theme;
+use crate::widgets::columns::Column;
 use crate::widgets::{panes, table, transport};
 use iced::widget::{button, container, row, text, text_input};
 use iced::{Element, Fill, Length, Subscription, Task};
@@ -71,6 +73,15 @@ pub struct App {
     theme: Theme,
     keymap: Keymap,
     placement: BrowserPlacement,
+    /// What persists between runs: theme, placement, columns, sort, drawer
+    /// heights.
+    settings: Settings,
+    paths: Paths,
+    /// §7.3: a header click overrides the configured sort transiently, with an
+    /// indicator and one action to drop back. It never replaces the chain.
+    sort_override: Option<(scoria_core::SortField, scoria_core::Direction)>,
+    /// The column edge being dragged, if any.
+    resizing_column: Option<usize>,
 
     /// The current query and its result. `rows` is the ordered id list; the
     /// tracks themselves are looked up through the session's index.
@@ -136,8 +147,15 @@ impl App {
     /// Whatever opening the session failed with.
     pub fn new() -> Result<Self, scoria_core::error::CoreError> {
         let paths = Paths::from_env()?;
-        let session = Session::open(paths)?;
+        let settings = Settings::load(&paths)?;
+        let session = Session::open(paths.clone())?;
+
         let mut app = Self::with_session(Some(session), String::new());
+        app.theme = settings.theme();
+        app.placement = settings.placement;
+        app.selection.sort = settings.sort.chain();
+        app.paths = paths;
+        app.settings = settings;
         app.refresh();
         app.begin_watching();
         Ok(app)
@@ -155,6 +173,10 @@ impl App {
             theme: Theme::dark(),
             keymap: Keymap::standard(),
             placement: BrowserPlacement::default(),
+            settings: Settings::default(),
+            paths: Paths::rooted_at(std::env::temp_dir().join("scoria-unconfigured")),
+            sort_override: None,
+            resizing_column: None,
             selection: Selection::all(),
             rows: Vec::new(),
             lines: Vec::new(),
@@ -404,6 +426,66 @@ impl App {
                 self.scroll_offset = offset;
                 self.viewport_height = viewport;
             }
+            table::Event::SortBy(column) => self.sort_by(column),
+            // The column menu arrives with the rest of §7.3's header actions.
+            table::Event::HeadingMenu => {}
+            table::Event::ResizeStart(index) => self.resizing_column = Some(index),
+            table::Event::ResizeTo(fraction) => {
+                if let Some(index) = self.resizing_column {
+                    self.settings.columns.drag_edge(index, fraction);
+                }
+            }
+            table::Event::ResizeEnd => {
+                self.resizing_column = None;
+                // Saved on release rather than on every pointer move: a drag is
+                // hundreds of events and one outcome.
+                self.persist();
+            }
+        }
+    }
+
+    /// §7.3: a header click applies a transient override on top of the
+    /// configured sort, with a visible indicator and one action to drop back.
+    /// It never replaces the configured chain.
+    fn sort_by(&mut self, column: Column) {
+        use scoria_core::Direction;
+        let field = column.sort_field();
+
+        self.sort_override = match self.sort_override {
+            // Clicking the same heading again reverses it, and a third time
+            // returns to the configured sort -- so the override is always one
+            // click from being gone.
+            Some((current, Direction::Ascending)) if current == field => {
+                Some((field, Direction::Descending))
+            }
+            Some((current, Direction::Descending)) if current == field => None,
+            _ => Some((field, Direction::Ascending)),
+        };
+        self.apply_sort();
+    }
+
+    /// Rebuilds the sort chain from the configured preset and any override.
+    fn apply_sort(&mut self) {
+        let configured = self.settings.sort.chain();
+        self.selection.sort = match self.sort_override {
+            None => configured,
+            Some((field, direction)) => {
+                // On top of, not instead of: the configured chain still breaks
+                // ties, so an override on a coarse field keeps albums in order
+                // within it.
+                let mut keys = vec![scoria_core::SortKey { field, direction }];
+                keys.extend(configured.keys().iter().copied());
+                scoria_core::SortChain::new(keys)
+            }
+        };
+        self.refresh();
+    }
+
+    /// Writes the frontend's settings, reporting rather than failing.
+    fn persist(&mut self) {
+        self.settings.placement = self.placement;
+        if let Err(e) = self.settings.save(&self.paths) {
+            self.status = format!("cannot save settings: {e}");
         }
     }
 
@@ -424,6 +506,13 @@ impl App {
                 self.queue_scroll = offset;
                 self.viewport_height = viewport;
             }
+            // The queue is a play order, not a view to sort or rearrange, so
+            // its headings offer none of this.
+            table::Event::SortBy(_)
+            | table::Event::HeadingMenu
+            | table::Event::ResizeStart(_)
+            | table::Event::ResizeTo(_)
+            | table::Event::ResizeEnd => {}
         }
         Task::none()
     }
@@ -762,6 +851,7 @@ impl App {
             Action::CycleLayout => {
                 self.placement = self.placement.cycle();
                 self.status = self.placement.label().to_owned();
+                self.persist();
             }
             Action::FocusSearch => {
                 return iced::widget::operation::focus(iced::widget::Id::new(SEARCH_ID));
@@ -949,6 +1039,9 @@ impl App {
             selected: self.cursor,
             playing: self.playing,
             playing_row: None,
+            columns: &self.settings.columns,
+            sort: self.sort_override,
+            resizing: self.resizing_column.is_some(),
             scroll_offset: self.scroll_offset,
             theme: &self.theme,
             id: TABLE_ID,
@@ -1062,6 +1155,7 @@ impl App {
         match overlay {
             Overlay::Queue => overlays::queue::view(
                 overlays::queue::QueueView {
+                    columns: &self.settings.columns,
                     lines: &self.queue_lines,
                     rows: self.queue_rows(),
                     position: self

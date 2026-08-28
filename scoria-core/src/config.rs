@@ -173,6 +173,71 @@ pub fn load<T: DeserializeOwned + Default>(path: &Path) -> Result<T, CoreError> 
         .map_err(|e| CoreError::Config(format!("cannot parse {}: {e}", path.display())))
 }
 
+/// Reads one section of a settings file.
+///
+/// Missing file, or missing section, yields defaults. See [`save_section`] for
+/// why sections exist.
+///
+/// # Errors
+///
+/// [`CoreError::Config`] if the file exists but cannot be read or parsed.
+pub fn load_section<T: DeserializeOwned + Default>(
+    path: &Path,
+    section: &str,
+) -> Result<T, CoreError> {
+    let document: toml::Table = match fs::read_to_string(path) {
+        Ok(text) => toml::from_str(&text)
+            .map_err(|e| CoreError::Config(format!("cannot parse {}: {e}", path.display())))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
+        Err(e) => {
+            return Err(CoreError::Config(format!(
+                "cannot read {}: {e}",
+                path.display()
+            )));
+        }
+    };
+
+    let Some(value) = document.get(section) else {
+        return Ok(T::default());
+    };
+    value.clone().try_into().map_err(|e| {
+        CoreError::Config(format!(
+            "cannot read [{section}] from {}: {e}",
+            path.display()
+        ))
+    })
+}
+
+/// Writes one section of a settings file, leaving everything else untouched.
+///
+/// This is what makes one file work for several owners. Core owns the library
+/// settings and a frontend owns its own; neither can name the other's types, so
+/// neither can serialise the whole document. Writing the whole file from either
+/// side would silently delete the other's settings the first time it saved.
+///
+/// # Errors
+///
+/// [`CoreError::Config`] if the existing file cannot be read or parsed, the
+/// value cannot be serialised, or the file cannot be written.
+pub fn save_section<T: Serialize>(path: &Path, section: &str, value: &T) -> Result<(), CoreError> {
+    let mut document: toml::Table = match fs::read_to_string(path) {
+        Ok(text) => toml::from_str(&text)
+            .map_err(|e| CoreError::Config(format!("cannot parse {}: {e}", path.display())))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+        Err(e) => {
+            return Err(CoreError::Config(format!(
+                "cannot read {}: {e}",
+                path.display()
+            )));
+        }
+    };
+
+    let value = toml::Value::try_from(value)
+        .map_err(|e| CoreError::Config(format!("cannot serialise [{section}]: {e}")))?;
+    document.insert(section.to_owned(), value);
+    write_atomically(path, &document)
+}
+
 /// Writes a settings file, creating the directory if needed.
 ///
 /// Writes to a temporary file and renames over the target, so an interrupted
@@ -183,6 +248,14 @@ pub fn load<T: DeserializeOwned + Default>(path: &Path) -> Result<T, CoreError> 
 /// [`CoreError::Config`] if the value cannot be serialised or the file cannot
 /// be written.
 pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<(), CoreError> {
+    write_atomically(path, value)
+}
+
+/// Writes to a temporary file and renames over the target.
+///
+/// An interrupted write cannot leave a half-written config that fails to parse
+/// on next start.
+fn write_atomically<T: Serialize>(path: &Path, value: &T) -> Result<(), CoreError> {
     let text = toml::to_string_pretty(value)
         .map_err(|e| CoreError::Config(format!("cannot serialise settings: {e}")))?;
 

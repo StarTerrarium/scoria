@@ -347,6 +347,17 @@ impl Theme {
         }
     }
 
+    /// The grabbable divider between two column headings.
+    #[must_use]
+    pub fn column_divider_style(&self) -> container::Style {
+        container::Style {
+            background: Some(Background::Color(colour(
+                self.roles.background.mix(self.roles.text, 0.22),
+            ))),
+            ..container::Style::default()
+        }
+    }
+
     /// The drag handle at the top of a drawer.
     #[must_use]
     pub fn grip_style(&self) -> container::Style {

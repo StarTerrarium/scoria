@@ -3,6 +3,7 @@
 //! `table` is the one track table (invariant 3). `transport` is the bar §8
 //! describes. Layouts arrange these; they never define their own.
 
+pub mod columns;
 pub mod panes;
 pub mod table;
 pub mod transport;

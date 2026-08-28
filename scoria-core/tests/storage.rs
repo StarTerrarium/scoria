@@ -579,3 +579,85 @@ fn xdg_paths_are_namespaced_and_absolute() {
     }
     assert!(paths.database().ends_with("scoria/library.db"));
 }
+
+// --------------------------------------------------- sections (one file, two owners) --
+
+#[test]
+fn writing_one_section_leaves_the_others_alone() {
+    // The property that lets core and a frontend share a settings file. Neither
+    // can name the other's types, so neither can serialise the whole document;
+    // writing it wholesale from either side would delete the other's settings.
+    let path = tempdir().join("sections.toml");
+    let _ = std::fs::remove_file(&path);
+
+    let library = LibraryConfig {
+        root: Some("/home/someone/Music".into()),
+        play_behaviour: PlayBehaviour::WholeLibrary,
+        sort: SortPreset::Year,
+    };
+    scoria_core::config::save(&path, &library).unwrap();
+
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(default)]
+    struct Ui {
+        theme: String,
+        columns: Vec<String>,
+    }
+    let ui = Ui {
+        theme: "Scoria Dark".to_owned(),
+        columns: vec!["title".to_owned()],
+    };
+    scoria_core::config::save_section(&path, "ui", &ui).unwrap();
+
+    // Both survive.
+    assert_eq!(
+        scoria_core::config::load::<LibraryConfig>(&path).unwrap(),
+        library
+    );
+    assert_eq!(
+        scoria_core::config::load_section::<Ui>(&path, "ui").unwrap(),
+        ui
+    );
+}
+
+#[test]
+fn a_missing_section_yields_defaults() {
+    let path = tempdir().join("no-section.toml");
+    let _ = std::fs::remove_file(&path);
+    scoria_core::config::save(&path, &LibraryConfig::default()).unwrap();
+
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(default)]
+    struct Ui {
+        theme: String,
+    }
+    assert_eq!(
+        scoria_core::config::load_section::<Ui>(&path, "ui").unwrap(),
+        Ui::default()
+    );
+}
+
+#[test]
+fn a_section_can_be_rewritten_without_growing_the_file() {
+    let path = tempdir().join("rewrite.toml");
+    let _ = std::fs::remove_file(&path);
+
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(default)]
+    struct Ui {
+        width: u32,
+    }
+    scoria_core::config::save_section(&path, "ui", &Ui { width: 100 }).unwrap();
+    scoria_core::config::save_section(&path, "ui", &Ui { width: 200 }).unwrap();
+
+    assert_eq!(
+        scoria_core::config::load_section::<Ui>(&path, "ui").unwrap(),
+        Ui { width: 200 }
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        text.matches("[ui]").count(),
+        1,
+        "the section was duplicated:\n{text}"
+    );
+}

@@ -18,16 +18,23 @@
 //! division instead of a search.
 
 use crate::theme::{RowState, Theme};
+use crate::widgets::columns::{Column, ColumnLayout};
 use iced::widget::{Space, column, container, mouse_area, responsive, row, scrollable, text};
 use iced::{Alignment, Element, Fill, Length};
 use scoria_core::id::TrackId;
 use scoria_core::model::Track;
 use scoria_core::query::sort::Group;
+use scoria_core::query::sort::{Direction, SortField};
 
 /// Every row is the same height, which is what makes virtualisation arithmetic.
 pub const ROW_HEIGHT: f32 = 22.0;
 /// Rows built beyond the viewport, so a fast scroll does not show gaps.
 const OVERSCAN: usize = 6;
+
+/// The grab area between two headings.
+///
+/// Wide enough to hit without aiming, narrow enough not to look like a gutter.
+const DIVIDER_WIDTH: f32 = 6.0;
 
 /// One line of the display list.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +135,13 @@ pub struct TableView<'a> {
     /// Identifies the scrollable, so moving the cursor by keyboard can move the
     /// view with it.
     pub id: &'static str,
+    /// Which columns to draw, in order, and how wide (§7.3).
+    pub columns: &'a ColumnLayout,
+    /// The sort currently applied, so the heading can show it.
+    pub sort: Option<(SortField, Direction)>,
+    /// Whether a column edge is being dragged, which needs a pointer catcher
+    /// over the whole table.
+    pub resizing: bool,
 }
 
 /// Messages the table produces. Translated by the application into commands;
@@ -141,12 +155,24 @@ pub enum Event {
     /// Right-click, which §9.1 makes the one escape hatch from artwork
     /// following playback.
     Context(usize),
+    /// A heading was clicked: sort by it (§7.3).
+    SortBy(Column),
+    /// A heading was right-clicked: offer the column menu.
+    HeadingMenu,
+    /// The edge after the `index`th visible column was grabbed.
+    ResizeStart(usize),
+    /// That edge is now at this fraction of the table's width.
+    ResizeTo(f32),
+    ResizeEnd,
     /// The scroll position moved, and the viewport is this tall.
     ///
     /// Virtualisation cannot work without this. The window of built rows comes
     /// from where the scroll is, so a table that is never told about scrolling
     /// renders one screenful and blank space for the rest of the library.
-    Scrolled { offset: f32, viewport: f32 },
+    Scrolled {
+        offset: f32,
+        viewport: f32,
+    },
 }
 
 /// Builds the table.
@@ -155,7 +181,9 @@ pub fn view<'a, Message: Clone + 'a>(
     table: TableView<'a>,
     on_event: impl Fn(Event) -> Message + Copy + 'a,
 ) -> Element<'a, Message, Theme> {
-    let header_row = header(table.theme);
+    // Read before the view moves into the closure below.
+    let resizing = table.resizing;
+    let header_row = header(&table, &on_event);
 
     // `responsive` hands the closure the space actually available, which is the
     // only honest source for the viewport height. Deriving it from the window
@@ -205,38 +233,106 @@ pub fn view<'a, Message: Clone + 'a>(
             .into()
     });
 
-    column![header_row, body].width(Fill).height(Fill).into()
+    let table_body = column![header_row, body].width(Fill).height(Fill);
+    if !resizing {
+        return table_body.into();
+    }
+
+    // While dragging, a transparent sheet follows the pointer wherever it goes.
+    // Without it the drag stops the moment the cursor leaves a six-pixel gap.
+    let catcher = responsive(move |size| {
+        mouse_area(Space::new().width(Fill).height(Fill))
+            .interaction(iced::mouse::Interaction::ResizingHorizontally)
+            .on_move(move |point| {
+                let fraction = if size.width > 0.0 {
+                    point.x / size.width
+                } else {
+                    0.0
+                };
+                on_event(Event::ResizeTo(fraction))
+            })
+            .on_release(on_event(Event::ResizeEnd))
+            .into()
+    });
+    iced::widget::stack![table_body, catcher]
+        .width(Fill)
+        .height(Fill)
+        .into()
 }
 
-/// The column header. §7.3 gives the default column set.
-fn header<'a, Message: 'a>(theme: &Theme) -> Element<'a, Message, Theme> {
+/// The column header (§7.3).
+///
+/// Each heading is a click target for sorting, and each gap between them is a
+/// drag target for resizing. Right-clicking anywhere on it opens the column
+/// menu, which is where show, hide and reorder live.
+fn header<'a, Message: Clone + 'a>(
+    table: &TableView<'_>,
+    on_event: &impl Fn(Event) -> Message,
+) -> Element<'a, Message, Theme> {
+    let theme = table.theme;
     let style = theme.header_style();
-    let cell = |label: &'static str, width: Length| {
-        container(text(label).size(12)).width(width).padding([0, 6])
-    };
+    let muted = theme.text_style(theme.muted_colour());
+    let accent = theme.text_style(theme.accent_colour());
 
-    container(
-        row![
-            cell("#", Length::Fixed(34.0)),
-            cell("TITLE", Length::FillPortion(4)),
-            cell("ALBUM ARTIST", Length::FillPortion(3)),
-            cell("ARTIST", Length::FillPortion(3)),
-            cell("ALBUM", Length::FillPortion(3)),
-            cell("TIME", Length::Fixed(60.0)),
-            cell("YEAR", Length::Fixed(50.0)),
-        ]
+    let mut headings = row![]
         .align_y(Alignment::Center)
-        .height(Length::Fixed(ROW_HEIGHT)),
-    )
-    .style(move |_theme: &Theme| style)
-    .padding(iced::Padding {
-        top: 0.0,
-        right: crate::widgets::SCROLLBAR_ALLOWANCE,
-        bottom: 0.0,
-        left: 0.0,
-    })
-    .width(Fill)
-    .into()
+        .height(Length::Fixed(ROW_HEIGHT));
+    let visible = table.columns.visible();
+
+    for (index, setting) in visible.iter().enumerate() {
+        let sorted_by = table
+            .sort
+            .filter(|(field, _)| *field == setting.column.sort_field());
+        // An arrow only where the sort actually is: §7.3's transient override
+        // has to be visible, and a marker on every column would say nothing.
+        let label = match sorted_by {
+            Some((_, Direction::Ascending)) => format!("{} ▲", setting.column.heading()),
+            Some((_, Direction::Descending)) => format!("{} ▼", setting.column.heading()),
+            None => setting.column.heading().to_owned(),
+        };
+        let colour = if sorted_by.is_some() { accent } else { muted };
+
+        headings = headings.push(
+            mouse_area(
+                container(text(label).size(12).style(move |_t: &Theme| colour))
+                    .width(Length::FillPortion(setting.weight))
+                    .height(Fill)
+                    .align_y(Alignment::Center)
+                    .padding(iced::Padding::from([0.0, 6.0]))
+                    .clip(true),
+            )
+            .on_press(on_event(Event::SortBy(setting.column)))
+            .on_right_press(on_event(Event::HeadingMenu)),
+        );
+
+        // The divider after the last column would have nothing to take width
+        // from, so it is not offered.
+        if index + 1 < visible.len() {
+            let grip = theme.column_divider_style();
+            headings = headings.push(
+                mouse_area(
+                    container(Space::new().width(Length::Fixed(1.0)).height(Fill))
+                        .width(Length::Fixed(DIVIDER_WIDTH))
+                        .height(Fill)
+                        .align_x(Alignment::Center)
+                        .style(move |_t: &Theme| grip),
+                )
+                .interaction(iced::mouse::Interaction::ResizingHorizontally)
+                .on_press(on_event(Event::ResizeStart(index))),
+            );
+        }
+    }
+
+    container(headings)
+        .style(move |_theme: &Theme| style)
+        .padding(iced::Padding {
+            top: 0.0,
+            right: crate::widgets::SCROLLBAR_ALLOWANCE,
+            bottom: 0.0,
+            left: 0.0,
+        })
+        .width(Fill)
+        .into()
 }
 
 /// A group header.
@@ -282,71 +378,43 @@ fn track_row<'a, Message: Clone + 'a>(
 
     let theme = table.theme;
     let text_colour = theme.text_style(theme.row_text(state));
-    let cell = move |value: String, width: Length| {
-        container(
-            text(value)
-                .size(13)
-                .style(move |_theme: &Theme| text_colour),
-        )
-        .width(width)
-        .padding([0, 6])
-        .clip(true)
-    };
 
     // §7.4: a missing file is marked rather than removed, so what will happen
     // is stated rather than left to be discovered.
-    let title = if track.available {
-        track.title.clone()
-    } else {
-        format!("{}  (missing)", track.title)
-    };
+    let visible = table.columns.visible();
+    let mut cells = row![]
+        .align_y(Alignment::Center)
+        .height(Length::Fixed(ROW_HEIGHT));
+    for (index, setting) in visible.iter().enumerate() {
+        // §7.4: a missing file is marked rather than removed, so what will
+        // happen is stated rather than left to be discovered.
+        let value = if setting.column == Column::Title && !track.available {
+            format!("{}  (missing)", track.title)
+        } else {
+            setting.column.value(track)
+        };
+
+        cells = cells.push(
+            container(text(value).size(13).style(move |_t: &Theme| text_colour))
+                .width(Length::FillPortion(setting.weight))
+                .padding(iced::Padding::from([0.0, 6.0]))
+                .clip(true),
+        );
+        if index + 1 < visible.len() {
+            cells = cells.push(Space::new().width(Length::Fixed(DIVIDER_WIDTH)));
+        }
+    }
 
     let style = theme.row_style(state);
-    let content = container(
-        row![
-            cell(
-                track.track_number.map_or_default_number(),
-                Length::Fixed(34.0)
-            ),
-            cell(title, Length::FillPortion(4)),
-            // §4.1: album artist is structural, artist is display. Both are
-            // shown by default, deliberately.
-            cell(track.album_artist.clone(), Length::FillPortion(3)),
-            cell(track.artist.clone(), Length::FillPortion(3)),
-            cell(track.album.clone(), Length::FillPortion(3)),
-            cell(
-                crate::widgets::format_duration(track.duration),
-                Length::Fixed(60.0)
-            ),
-            cell(
-                track
-                    .date
-                    .map_or_else(String::new, |d| d.year().to_string()),
-                Length::Fixed(50.0)
-            ),
-        ]
-        .align_y(Alignment::Center)
-        .height(Length::Fixed(ROW_HEIGHT)),
-    )
-    .width(Fill)
-    .style(move |_theme: &Theme| style);
+    let content = container(cells)
+        .width(Fill)
+        .style(move |_theme: &Theme| style);
 
     mouse_area(content)
         .on_press(on_event(Event::Select(row_index)))
         .on_double_click(on_event(Event::Activate(row_index)))
         .on_right_press(on_event(Event::Context(row_index)))
         .into()
-}
-
-/// Small helper so the track-number cell reads cleanly at the call site.
-trait NumberCell {
-    fn map_or_default_number(self) -> String;
-}
-
-impl NumberCell for Option<u16> {
-    fn map_or_default_number(self) -> String {
-        self.map_or_else(String::new, |n| n.to_string())
-    }
 }
 
 #[cfg(test)]

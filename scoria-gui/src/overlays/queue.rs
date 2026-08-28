@@ -20,6 +20,9 @@ use scoria_core::model::Track;
 
 /// What the queue needs in order to draw itself.
 pub struct QueueView<'a> {
+    /// The same columns the library table uses. §7.3's configuration applies
+    /// everywhere the table appears, because there is only one table.
+    pub columns: &'a crate::widgets::columns::ColumnLayout,
     /// The display list, owned by the caller.
     ///
     /// No groups: the snapshot is a play order, and a header wherever the album
@@ -78,6 +81,11 @@ pub fn view<'a, Message: Clone + 'a>(
         scroll_offset: queue.scroll_offset,
         theme,
         id: queue.id,
+        columns: queue.columns,
+        // The queue is a play order, not a view to sort or rearrange: its
+        // headings show no sort marker and its edges do not drag.
+        sort: None,
+        resizing: false,
     };
 
     let mut body = column![table::view(table_view, on_event)]

@@ -394,7 +394,11 @@ Search is not part of that summary. It has its own field in every placement and 
 
 One component, used by every layout and by the queue overlay. If it needs a second implementation, something has gone wrong.
 
-**Columns** support show/hide, reorder, and resize, from a right-click on the header. This is configuration that tunes a good default: bounded, discoverable, and ignorable. Splitters, dockable panes and layout files are not.
+**Columns** support show/hide, reorder, and resize, from a right-click on the header. This is configuration that tunes a good default: bounded, discoverable, and ignorable. What is banned is an edit mode that lets the application be assembled -- see §2 and `CLAUDE.md` invariant 4 for where that line falls.
+
+**Widths are weights, not pixels.** A column sized on one monitor is wrong on the next, exactly as a fixed drawer height was. Dragging an edge takes width from the column to its right rather than reflowing everything, so the columns beyond the one being dragged stay where they are. No column can be dragged away to nothing, because a column with no width cannot be grabbed again.
+
+The layout is repaired when read. A settings file can be older than the application or hand-edited: missing columns are appended and duplicates dropped, so a stale file costs the reader a column rather than costing the application one.
 
 Default columns: track number, title, duration, album artist, artist, album, year. Album artist and artist both shown by default, deliberately (§4.1).
 
@@ -409,6 +413,8 @@ Default columns: track number, title, duration, album artist, artist, album, yea
 A drag-and-drop chain builder is a DIY layout system wearing different clothes. Users with exotic needs edit the config file.
 
 Clicking a column header applies a **transient override** on top of the configured sort, with a visible indicator and one action to drop back. It never replaces the configured chain. Same relationship the queue snapshot has to the library: a temporary state you can always return from.
+
+On top of, not instead of: the configured chain still breaks ties, so overriding on a coarse field leaves albums in order within it. Clicking the same heading reverses the direction and clicking a third time drops the override, so it is never more than one click from gone. The heading carrying it shows an arrow; the others show nothing, because a marker on every column would say nothing at all.
 
 **Grouping** is derived, not configured: insert a header row whenever the primary sort key's value changes. It is therefore only meaningful when the chain starts with the grouped field. Sorting by duration switches grouping off automatically.
 
@@ -586,6 +592,8 @@ Recorded because they were decided without explicit sign-off. Flag if any are wr
 
 - Missing sort values land last in both directions (§4.4).
 - Settings live in one TOML file at `$XDG_CONFIG_HOME/scoria/config.toml`, with the database under `$XDG_DATA_HOME/scoria/` and thumbnails under `$XDG_CACHE_HOME/scoria/`. Each crate owns its own section of the file, so core never has to name a UI concept in order to store one. A config file that exists but does not parse is an error rather than a silent reset.
+- Each owner writes **only its own section**. Neither side can name the other's types, so neither can serialise the whole document, and writing it wholesale from either side would silently delete the other's settings the first time it saved.
+- Nothing persisted is a pixel count. Sizes are proportions, so a window arranged on one display is still arranged on another.
 - Album identity keys are length-prefixed rather than delimited, so no tag value can forge another album's identity (§4.2).
 - The schema is `STRICT`, has no library id anywhere (§5.1), and denormalises album artist and title onto `tracks` because sorting, grouping and the filter cascade all read them per row.
 - Shuffle uses a small owned PRNG rather than the `rand` crate, so that shuffle is deterministic under test.

@@ -12,6 +12,7 @@ pub mod app;
 pub mod keymap;
 pub mod layouts;
 pub mod overlays;
+pub mod settings;
 pub mod theme;
 pub mod widgets;
 
