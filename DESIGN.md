@@ -447,6 +447,8 @@ Tooltips only solve discovery for mouse users, and this is a keyboard-navigable 
 One family, one set of rules. Four overlays with three dismissal behaviours would be its own configuration burden.
 
 - One at a time, never stacked. The state is a single `Option`, so two cannot be expressed.
+- **An overlay must read as a layer, not as a change of screen.** Three things make that true, and the first version had none of them: it is capped in size rather than proportional, so it never covers the window; the library stays visible behind a partial scrim, because there is nothing to be *on top of* if the thing underneath is invisible; and it casts a shadow, which is the strongest depth cue a flat interface has.
+- **It appears over about a seventh of a second** rather than between one frame and the next. Something that is simply there does not register as having arrived, and the complaint that produced this rule was not being sure anything had happened at all. Every path that opens or replaces one restarts the transition -- a second overlay appearing fully formed would reintroduce exactly that doubt.
 - Escape closes. The key that opened it toggles it. With no overlay open, Escape clears the filters instead (§7.2) -- one key backing out of whatever is currently narrowing the view, rather than two bindings competing for it.
 - **"The key that opened it" means the same request, not the same kind.** Asking for a second track's properties replaces what is showing rather than closing it: you asked to see something, and answering by showing nothing would be a strange reading of "toggle". An identical request closes; anything else replaces.
 - Anything wanting to be a second simultaneous overlay is a pane, and panes are banned.

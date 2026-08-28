@@ -105,6 +105,8 @@ pub struct App {
     /// Which overlay is open. One `Option`, so §9's "one at a time, never
     /// stacked" cannot be expressed otherwise.
     overlay: Option<Overlay>,
+    /// When the current overlay started appearing, for the opening transition.
+    overlay_since: Option<std::time::Instant>,
     /// The playback snapshot, as the engine last reported it. This is what the
     /// queue shows -- §6.2's `tracks`, not the current view.
     queue: Option<scoria_core::PlaybackSource>,
@@ -164,6 +166,7 @@ impl App {
             viewport_height: 650.0,
             status,
             overlay: None,
+            overlay_since: None,
             queue: None,
             queue_lines: Vec::new(),
             queue_scroll: 0.0,
@@ -264,7 +267,7 @@ impl App {
             }
             Message::ClearFilters => self.clear_filters(),
             Message::Queue(event) => return self.on_queue(event),
-            Message::CloseOverlay => self.overlay = None,
+            Message::CloseOverlay => self.set_overlay(None),
             Message::ArtistPane(event) => self.on_artist_pane(event),
             Message::AlbumPane(event) => self.on_album_pane(event),
             Message::Action(action) => return self.on_action(action),
@@ -371,7 +374,7 @@ impl App {
                     .get(index)
                     .and_then(|id| self.track(*id))
                     .map(|t| t.album_id);
-                self.overlay = Some(Overlay::Artwork(album));
+                self.set_overlay(Some(Overlay::Artwork(album)));
             }
             table::Event::Scrolled { offset, viewport } => {
                 self.scroll_offset = offset;
@@ -434,7 +437,7 @@ impl App {
 
     /// Opens, closes or replaces an overlay, and prepares whatever it needs.
     fn open_overlay(&mut self, requested: Overlay) -> Task<Message> {
-        self.overlay = overlays::toggle(self.overlay, requested);
+        self.set_overlay(overlays::toggle(self.overlay, requested));
 
         // Reading a file's tags is I/O, so it happens once on open rather than
         // in the view, which runs every frame.
@@ -462,6 +465,26 @@ impl App {
             }
         }
         Task::none()
+    }
+
+    /// Changes which overlay is open, restarting the transition.
+    ///
+    /// Every path that opens or replaces one goes through here. A second
+    /// overlay appearing fully formed, because only the first reset the clock,
+    /// is exactly the "did anything happen?" problem this exists to solve.
+    fn set_overlay(&mut self, overlay: Option<Overlay>) {
+        if overlay == self.overlay {
+            return;
+        }
+        self.overlay_since = overlay.is_some().then(std::time::Instant::now);
+        self.overlay = overlay;
+    }
+
+    /// How far through its opening transition the overlay is.
+    fn overlay_progress(&self) -> f32 {
+        self.overlay_since.map_or(1.0, |since| {
+            overlays::progress(since, std::time::Instant::now())
+        })
     }
 
     /// Reads the file's own tags for the properties overlay.
@@ -575,7 +598,7 @@ impl App {
             // §9.1: the resting state is the thumbnail; clicking it opens the
             // playing track's art full size.
             transport::Event::ShowArtwork => {
-                self.overlay = overlays::toggle(self.overlay, Overlay::Artwork(None));
+                self.set_overlay(overlays::toggle(self.overlay, Overlay::Artwork(None)));
                 return Task::none();
             }
         };
@@ -642,8 +665,10 @@ impl App {
                 // §9: Escape closes the overlay. With none open it clears the
                 // filters instead -- one key backing out of whatever is
                 // currently narrowing the view.
-                if self.overlay.take().is_none() {
+                if self.overlay.is_none() {
                     self.clear_filters();
+                } else {
+                    self.set_overlay(None);
                 }
             }
         }
@@ -901,6 +926,7 @@ impl App {
                 overlay,
                 self.overlay_content(overlay),
                 &self.theme,
+                self.overlay_progress(),
                 Message::CloseOverlay,
             ),
         }

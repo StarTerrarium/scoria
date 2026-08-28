@@ -293,15 +293,31 @@ impl Theme {
     }
 
     /// The frame an overlay sits in (§9).
+    ///
+    /// Lifted rather than merely bordered. A panel the same shade as the
+    /// surface behind it, on a dark theme, reads as the screen having changed
+    /// rather than as something sitting above it -- so this is lighter than
+    /// anything else in the window and casts a shadow, which is the strongest
+    /// cue a flat interface has for depth.
     #[must_use]
     pub fn overlay_style(&self) -> container::Style {
         container::Style {
-            background: Some(Background::Color(colour(self.roles.surface))),
+            background: Some(Background::Color(colour(
+                self.roles.background.mix(self.roles.text, 0.12),
+            ))),
             text_color: Some(colour(self.roles.text)),
             border: Border {
-                color: colour(self.roles.border),
+                color: colour(self.roles.background.mix(self.roles.text, 0.28)),
                 width: 1.0,
-                radius: border::radius(4),
+                radius: border::radius(8),
+            },
+            shadow: iced::Shadow {
+                color: Color {
+                    a: 0.55,
+                    ..Color::BLACK
+                },
+                offset: iced::Vector::new(0.0, 10.0),
+                blur_radius: 28.0,
             },
             ..container::Style::default()
         }
@@ -309,13 +325,20 @@ impl Theme {
 
     /// The dimming behind an overlay.
     ///
-    /// Dark rather than merely translucent: the point is that the explorer is
-    /// not available, which §9.2 calls the whole reason the queue is modal.
+    /// Deliberately not opaque. The library has to stay *visible* underneath,
+    /// or there is nothing for the overlay to be on top of and opening one
+    /// reads as a navigation rather than a layer. Black rather than the theme
+    /// background, because tinting a dark background with more of itself dims
+    /// nothing.
+    /// `progress` runs 0 to 1 as the overlay opens, so the dimming fades in
+    /// rather than appearing between one frame and the next.
     #[must_use]
-    pub fn scrim_style(&self) -> container::Style {
-        let base = colour(self.roles.background);
+    pub fn scrim_style(&self, progress: f32) -> container::Style {
         container::Style {
-            background: Some(Background::Color(Color { a: 0.75, ..base })),
+            background: Some(Background::Color(Color {
+                a: 0.45 * progress.clamp(0.0, 1.0),
+                ..Color::BLACK
+            })),
             ..container::Style::default()
         }
     }
