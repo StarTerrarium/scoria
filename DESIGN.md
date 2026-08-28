@@ -424,6 +424,12 @@ The one deliberate exception is album artist, which orders on `albumartistsort` 
 
 On top of, not instead of: the configured chain still breaks ties, so overriding on a coarse field leaves albums in order within it. Clicking the same heading reverses the direction and clicking a third time drops the override, so it is never more than one click from gone. The heading carrying it shows an arrow; the others show nothing, because a marker on every column would say nothing at all.
 
+**Selection** is a set, not a row. Plain click replaces it, shift extends from where the range started, control toggles one row, and shift with the arrow keys does the same from the keyboard. The anchor is where a range began rather than wherever the cursor has since reached, so extending twice grows one range instead of walking one.
+
+Selecting several tracks and playing them makes **those tracks** the snapshot, which is what §6.2's materialised source is for: what you chose *is* the play order, and nothing re-derives it afterwards. A single row still means "play from here", so the §6.3 setting decides what gets snapshotted around it.
+
+A right-click on an unselected row moves the selection to it; on a selected one it leaves the selection alone, so a stray click cannot lose a set you have just built. Re-running a query drops any selection past the end of the new result: those indices referred to rows that are no longer there.
+
 **Grouping** is derived, not configured: insert a header row whenever the primary sort key's value changes. It is therefore only meaningful when the chain starts with the grouped field. Sorting by duration switches grouping off automatically.
 
 **Group headers are not click targets.** An earlier version of this section made them play their group on a single click. That made the most destructive action available in the table -- replacing the playback snapshot -- the easiest one to trigger by accident, while every other activation is a double-click. §6.1 is explicit that browsing never disturbs playback, and a stray click on a header is browsing.

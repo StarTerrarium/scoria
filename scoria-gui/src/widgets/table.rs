@@ -121,7 +121,10 @@ pub struct TableView<'a> {
     /// Owned, so the whole view can move into the `responsive` closure -- which
     /// is what lets the table measure its own viewport.
     pub rows: Vec<&'a Track>,
-    pub selected: Option<usize>,
+    /// Every selected row. A set rather than an index, because §7.3's
+    /// selection model is shared by every layout and a range selection is one
+    /// of the things it has to be able to express.
+    pub selected: &'a std::collections::BTreeSet<usize>,
     /// The playing track, by id. What the library view knows.
     pub playing: Option<TrackId>,
     /// The playing row, by index. What the queue knows.
@@ -370,7 +373,7 @@ fn track_row<'a, Message: Clone + 'a>(
     on_event: &impl Fn(Event) -> Message,
 ) -> Element<'a, Message, Theme> {
     let state = RowState {
-        selected: table.selected == Some(row_index),
+        selected: table.selected.contains(&row_index),
         playing: table.playing == Some(track.id) || table.playing_row == Some(row_index),
         alternate: row_index % 2 == 1,
         available: track.available,

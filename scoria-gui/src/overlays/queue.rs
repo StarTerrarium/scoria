@@ -34,14 +34,18 @@ pub struct QueueView<'a> {
     pub rows: Vec<&'a Track>,
     /// Index into the snapshot of the track playing now.
     pub position: Option<usize>,
-    /// The row the user has clicked or arrowed onto.
+    /// The row the user has clicked or arrowed onto, as a set of one.
+    ///
+    /// Owned by the caller so it outlives this call. The queue picks a position
+    /// rather than a selection: there is nothing to do with several rows of a
+    /// play order at once.
     ///
     /// Separate from `position`: §11's roles exist because a track can be
     /// selected, playing, both, either or neither, and the queue is where all
     /// four happen. An earlier version made a click do nothing at all, on the
     /// grounds that selection in a play order *is* the position -- which is
     /// tidy reasoning and reads as a broken window.
-    pub cursor: Option<usize>,
+    pub cursor: &'a std::collections::BTreeSet<usize>,
     pub scroll_offset: f32,
     /// Set when the view's contents no longer match the snapshot.
     pub divergence: Option<String>,

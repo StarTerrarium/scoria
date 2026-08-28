@@ -63,6 +63,9 @@ pub enum Message {
     SearchChanged(String),
     /// A key press, already resolved through the keymap.
     Action(Action),
+    /// Which modifiers are held. Pointer events do not carry them, so a click
+    /// cannot tell plain from shift from control without this.
+    Modifiers(crate::keymap::Mods),
 }
 
 /// Everything the window shows.
@@ -99,10 +102,20 @@ pub struct App {
     artist_scroll: f32,
     album_scroll: f32,
 
-    /// The row the keyboard is on. Selection is deliberately independent of
-    /// playback -- §6.1: browsing never disturbs what is playing, and the two
-    /// are allowed to disagree.
+    /// The row the keyboard is on, and the rows selected.
+    ///
+    /// Selection is deliberately independent of playback -- §6.1: browsing
+    /// never disturbs what is playing, and the two are allowed to disagree.
+    ///
+    /// `anchor` is where a range selection started, so shift-clicking or
+    /// shift-arrowing extends from the same place rather than from wherever the
+    /// cursor happens to have reached.
     cursor: Option<usize>,
+    selected: std::collections::BTreeSet<usize>,
+    anchor: Option<usize>,
+    /// Modifiers currently held, so a click can tell plain from shift from
+    /// control. Pointer events do not carry them.
+    modifiers: crate::keymap::Mods,
 
     playing: Option<TrackId>,
     state: PlaybackState,
@@ -128,7 +141,9 @@ pub struct App {
     queue_lines: Vec<table::Line>,
     queue_scroll: f32,
     /// The row the queue's own cursor is on, independent of what is playing.
-    queue_cursor: Option<usize>,
+    ///
+    /// A set of one, because the table it is drawn with takes a selection.
+    queue_selection: std::collections::BTreeSet<usize>,
     /// The file's own tags, read when the properties overlay opens.
     properties: Vec<(String, String)>,
     properties_problem: Option<String>,
@@ -183,6 +198,9 @@ impl App {
             artist_scroll: 0.0,
             album_scroll: 0.0,
             cursor: None,
+            selected: std::collections::BTreeSet::new(),
+            anchor: None,
+            modifiers: crate::keymap::Mods::NONE,
             playing: None,
             state: PlaybackState::Stopped,
             position: Duration::ZERO,
@@ -198,7 +216,7 @@ impl App {
             queue: None,
             queue_lines: Vec::new(),
             queue_scroll: 0.0,
-            queue_cursor: None,
+            queue_selection: std::collections::BTreeSet::new(),
             properties: Vec::new(),
             properties_problem: None,
         }
@@ -271,6 +289,10 @@ impl App {
                         ""
                     }
                 );
+                // Row indices refer to the previous result, so anything past
+                // the end means nothing now.
+                self.selected.retain(|index| *index < self.rows.len());
+                self.anchor = self.anchor.filter(|a| *a < self.rows.len());
                 if self.cursor.is_some_and(|c| c >= self.rows.len()) {
                     self.cursor = None;
                 }
@@ -318,6 +340,7 @@ impl App {
             Message::ArtistPane(event) => self.on_artist_pane(event),
             Message::AlbumPane(event) => self.on_album_pane(event),
             Message::Action(action) => return self.on_action(action),
+            Message::Modifiers(modifiers) => self.modifiers = modifiers,
         }
         Task::none()
     }
@@ -403,7 +426,7 @@ impl App {
 
     fn on_table(&mut self, event: table::Event) {
         match event {
-            table::Event::Select(index) => self.cursor = Some(index),
+            table::Event::Select(index) => self.select(index, self.modifiers),
             table::Event::Activate(index) => {
                 self.cursor = Some(index);
                 self.play_from_cursor();
@@ -415,7 +438,12 @@ impl App {
             // right-click opens the overlay for *that* album, without turning
             // into a follow-selection mode.
             table::Event::Context(index) => {
-                self.cursor = Some(index);
+                // A right-click on an unselected row moves the selection to it;
+                // on a selected one it leaves the selection alone, so acting on
+                // several rows is not lost to a stray click.
+                if !self.selected.contains(&index) {
+                    self.select(index, crate::keymap::Mods::NONE);
+                }
                 let album = self
                     .rows
                     .get(index)
@@ -526,10 +554,10 @@ impl App {
             // click producing no response at all reads as a broken window,
             // whatever the model says selection ought to mean here.
             table::Event::Select(index) | table::Event::Context(index) => {
-                self.queue_cursor = Some(index);
+                self.queue_selection = std::iter::once(index).collect();
             }
             table::Event::Activate(index) => {
-                self.queue_cursor = Some(index);
+                self.queue_selection = std::iter::once(index).collect();
                 self.send(Command::SetPosition(index));
             }
             table::Event::Scrolled { offset, viewport } => {
@@ -547,6 +575,11 @@ impl App {
         Task::none()
     }
 
+    /// The single row the queue's cursor is on.
+    fn queue_cursor(&self) -> Option<usize> {
+        self.queue_selection.iter().copied().next()
+    }
+
     /// Moves the queue's cursor, for the arrow keys.
     fn move_queue_cursor(&mut self, delta: isize) -> Task<Message> {
         let Some(queue) = &self.queue else {
@@ -556,11 +589,11 @@ impl App {
             return Task::none();
         };
 
-        let next = match self.queue_cursor {
+        let next = match self.queue_cursor() {
             None => queue.position().unwrap_or(0),
             Some(current) => current.saturating_add_signed(delta).min(last),
         };
-        self.queue_cursor = Some(next);
+        self.queue_selection = std::iter::once(next).collect();
         self.queue_scroll =
             table::centre_offset(next, self.queue_lines.len(), self.viewport_height);
 
@@ -630,7 +663,7 @@ impl App {
                 .queue
                 .as_ref()
                 .and_then(scoria_core::PlaybackSource::position);
-            self.queue_cursor = position;
+            self.queue_selection = position.into_iter().collect();
             if let Some(position) = position {
                 self.queue_scroll =
                     table::centre_offset(position, self.queue_lines.len(), self.viewport_height);
@@ -834,7 +867,7 @@ impl App {
                 Action::PageDown => return self.move_queue_cursor(self.page()),
                 Action::PageUp => return self.move_queue_cursor(-self.page()),
                 Action::PlaySelection => {
-                    if let Some(index) = self.queue_cursor {
+                    if let Some(index) = self.queue_cursor() {
                         self.send(Command::SetPosition(index));
                     }
                     return Task::none();
@@ -844,22 +877,24 @@ impl App {
         }
 
         match action {
-            Action::MoveDown => return self.move_cursor(1),
-            Action::MoveUp => return self.move_cursor(-1),
-            Action::PageDown => return self.move_cursor(self.page()),
-            Action::PageUp => return self.move_cursor(-self.page()),
+            Action::MoveDown => return self.move_selection(1, false),
+            Action::MoveUp => return self.move_selection(-1, false),
+            Action::PageDown => return self.move_selection(self.page(), false),
+            Action::PageUp => return self.move_selection(-self.page(), false),
             Action::MoveToStart => {
-                self.cursor = (!self.rows.is_empty()).then_some(0);
+                if !self.rows.is_empty() {
+                    self.select(0, crate::keymap::Mods::NONE);
+                }
                 return self.scroll_to_cursor();
             }
             Action::MoveToEnd => {
-                self.cursor = self.rows.len().checked_sub(1);
+                if let Some(last) = self.rows.len().checked_sub(1) {
+                    self.select(last, crate::keymap::Mods::NONE);
+                }
                 return self.scroll_to_cursor();
             }
-            // Multiple selection arrives with the selection model at M10; the
-            // actions exist now so the keymap is complete.
-            Action::ExtendUp => return self.move_cursor(-1),
-            Action::ExtendDown => return self.move_cursor(1),
+            Action::ExtendUp => return self.move_selection(-1, true),
+            Action::ExtendDown => return self.move_selection(1, true),
             Action::PlaySelection => self.play_from_cursor(),
             Action::PlayPause => {
                 let command = if self.state == PlaybackState::Playing {
@@ -967,29 +1002,42 @@ impl App {
     /// The §6.3 setting decides what gets snapshotted, and the session is the
     /// one place that decision is made -- which is why this hands over what is
     /// shown rather than deciding for itself.
-    fn play_from_cursor(&mut self) {
-        let Some(index) = self.cursor else { return };
-        let Some(at) = self.rows.get(index).copied() else {
+    /// Applies a click to the selection.
+    ///
+    /// Plain replaces, shift extends from the anchor, control toggles. The
+    /// anchor is where a range started rather than wherever the cursor has
+    /// reached, so extending twice grows one range instead of walking one.
+    fn select(&mut self, index: usize, modifiers: crate::keymap::Mods) {
+        if index >= self.rows.len() {
             return;
-        };
-
-        let Some(session) = &self.session else { return };
-        let label = self.selection.label();
-        let spec = session.source_spec(self.rows.clone(), label);
-        self.send(Command::PlayFrom { source: spec, at });
-    }
-
-    fn send(&mut self, command: Command) {
-        let Some(session) = &mut self.session else {
-            self.status = "no library is open".to_owned();
-            return;
-        };
-        if let Err(e) = session.handle(command) {
-            self.status = format!("{e}");
         }
+        self.cursor = Some(index);
+
+        if modifiers.shift {
+            let anchor = self.anchor.unwrap_or(index);
+            let (from, to) = if anchor <= index {
+                (anchor, index)
+            } else {
+                (index, anchor)
+            };
+            self.selected = (from..=to).collect();
+            return;
+        }
+
+        if modifiers.ctrl {
+            if !self.selected.remove(&index) {
+                self.selected.insert(index);
+            }
+            self.anchor = Some(index);
+            return;
+        }
+
+        self.selected = std::iter::once(index).collect();
+        self.anchor = Some(index);
     }
 
-    fn move_cursor(&mut self, delta: isize) -> Task<Message> {
+    /// Moves the cursor, replacing or extending the selection.
+    fn move_selection(&mut self, delta: isize, extend: bool) -> Task<Message> {
         if self.rows.is_empty() {
             return Task::none();
         }
@@ -1004,8 +1052,54 @@ impl App {
             }
             Some(current) => current.saturating_add_signed(delta).min(last),
         };
-        self.cursor = Some(next);
+
+        self.select(
+            next,
+            crate::keymap::Mods {
+                shift: extend,
+                ctrl: false,
+                alt: false,
+            },
+        );
         self.scroll_to_cursor()
+    }
+
+    fn play_from_cursor(&mut self) {
+        let Some(index) = self.cursor else { return };
+        let Some(at) = self.rows.get(index).copied() else {
+            return;
+        };
+        let Some(session) = &self.session else { return };
+
+        // Several rows chosen means "play these", which is what a materialised
+        // snapshot is for (§6.2): the chosen tracks *are* the play order, and
+        // nothing re-derives them afterwards.
+        let spec = if self.selected.len() > 1 {
+            let tracks: Vec<_> = self
+                .selected
+                .iter()
+                .filter_map(|i| self.rows.get(*i).copied())
+                .collect();
+            scoria_core::SourceSpec::Shown {
+                label: Some(format!("{} tracks", tracks.len())),
+                tracks,
+            }
+        } else {
+            // One row means "play from here", so the §6.3 setting decides what
+            // gets snapshotted around it.
+            session.source_spec(self.rows.clone(), self.selection.label())
+        };
+        self.send(Command::PlayFrom { source: spec, at });
+    }
+
+    fn send(&mut self, command: Command) {
+        let Some(session) = &mut self.session else {
+            self.status = "no library is open".to_owned();
+            return;
+        };
+        if let Err(e) = session.handle(command) {
+            self.status = format!("{e}");
+        }
     }
 
     fn page(&self) -> isize {
@@ -1068,7 +1162,7 @@ impl App {
         let table_view = table::TableView {
             lines: &self.lines,
             rows: self.tracks(),
-            selected: self.cursor,
+            selected: &self.selected,
             playing: self.playing,
             playing_row: None,
             columns: &self.settings.columns,
@@ -1203,7 +1297,7 @@ impl App {
                         .queue
                         .as_ref()
                         .and_then(scoria_core::PlaybackSource::position),
-                    cursor: self.queue_cursor,
+                    cursor: &self.queue_selection,
                     scroll_offset: self.queue_scroll,
                     divergence: self.queue_divergence(),
                     theme: &self.theme,
@@ -1336,6 +1430,11 @@ impl App {
                 }) => KEYMAP
                     .with(|k| k.borrow().resolve_iced(key, modifiers))
                     .map(Message::Action),
+                // Tracked separately because a mouse click carries no
+                // modifiers of its own, and shift-click has to know.
+                iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => Some(
+                    Message::Modifiers(crate::keymap::Mods::from_iced(modifiers)),
+                ),
                 _ => None,
             }
         });
