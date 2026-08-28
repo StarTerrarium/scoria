@@ -51,6 +51,14 @@ pub enum Event {
         total: Option<usize>,
     },
     LibraryChanged(LibraryDelta),
+    /// A scan stopped, whether or not it found anything.
+    ///
+    /// `LibraryChanged` is not enough on its own: a scan that finds nothing
+    /// changed emits no deltas, so without this a frontend that had started
+    /// saying "scanning" would have no way to learn it had finished, and would
+    /// keep saying it. Emitted after any deltas, and after `Error` when the
+    /// scan failed, so it always terminates the sequence.
+    ScanFinished,
     /// A failure the core could not handle itself.
     ///
     /// This is what makes the no-panic policy workable: code that cannot

@@ -260,3 +260,62 @@ fn the_fixture_is_readable() {
     assert!(Path::new(&path).exists());
     assert!(scoria_core::library::tags::read(&path).is_ok());
 }
+
+#[test]
+fn a_scan_that_finds_nothing_still_says_it_finished() {
+    // The first-run case: someone points Scoria at a folder with no music in
+    // it. There are no deltas, so `LibraryChanged` never arrives -- and without
+    // a terminating event a frontend that started saying "scanning" would have
+    // no way to learn that it had stopped, and would say it forever.
+    let scratch = Scratch::new("empty");
+
+    let mut session = scratch.session();
+    session.start_watching().unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut finished = false;
+    while Instant::now() < deadline && !finished {
+        match session.next_event(Duration::from_millis(200)) {
+            Some(Event::ScanFinished) => finished = true,
+            Some(Event::LibraryChanged(delta)) => {
+                panic!("an empty library reported {delta:?}");
+            }
+            _ => {}
+        }
+    }
+
+    assert!(finished, "the scan never reported that it had finished");
+    assert_eq!(session.index().len(), 0);
+}
+
+#[test]
+fn a_scan_that_found_something_finishes_after_saying_so() {
+    // Order matters: a frontend takes `ScanFinished` as the end of the
+    // sequence, so a delta arriving after it would be applied to a library it
+    // had already decided was settled.
+    let scratch = Scratch::new("ordering");
+    scratch.write_track("a/01.flac", "First");
+
+    let mut session = scratch.session();
+    session.start_watching().unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut seen = Vec::new();
+    while Instant::now() < deadline && !seen.contains(&Event::ScanFinished) {
+        if let Some(event) = session.next_event(Duration::from_millis(200))
+            && matches!(event, Event::LibraryChanged(_) | Event::ScanFinished)
+        {
+            seen.push(event);
+        }
+    }
+
+    assert_eq!(
+        seen.last(),
+        Some(&Event::ScanFinished),
+        "the sequence was {seen:?}"
+    );
+    assert!(
+        seen.iter().any(|e| matches!(e, Event::LibraryChanged(_))),
+        "the scan found a track but reported no change: {seen:?}"
+    );
+}

@@ -351,15 +351,11 @@ impl Session {
 
                     match scanner.scan(&mut db, &mut report) {
                         Ok(outcome) => {
-                            let deltas = outcome.deltas();
-                            if deltas.is_empty() {
-                                // Nothing changed after all -- a temporary file,
-                                // or our own artwork cache being written. Saying
-                                // so anyway would make the frontend reload the
-                                // library for nothing.
-                                continue;
-                            }
-                            for delta in deltas {
+                            // Nothing changed after all -- a temporary file, or
+                            // our own artwork cache being written. No deltas,
+                            // because saying so would make the frontend reload
+                            // the library for nothing.
+                            for delta in outcome.deltas() {
                                 let _ = events.send(Event::LibraryChanged(delta));
                             }
                         }
@@ -367,6 +363,10 @@ impl Session {
                             let _ = events.send(Event::Error(e));
                         }
                     }
+                    // Always, and last. A frontend that started saying
+                    // "scanning" has no other way to learn that a scan which
+                    // changed nothing has stopped.
+                    let _ = events.send(Event::ScanFinished);
                 }
             })
             .map_err(|e| CoreError::Database(format!("cannot start the scan thread: {e}")))?;
@@ -611,6 +611,7 @@ impl Session {
         if outcome.deltas().is_empty() {
             self.emit(Event::LibraryChanged(LibraryDelta::Invalidated));
         }
+        self.emit(Event::ScanFinished);
 
         // The audio thread resolves against its own copy, so it needs the new
         // one -- but only after the scan, so a rescan mid-album cannot disturb
