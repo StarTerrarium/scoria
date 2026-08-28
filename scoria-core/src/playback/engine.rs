@@ -58,10 +58,14 @@ pub enum EngineCommand {
     PlaySource(Box<PlaybackSource>),
     Pause,
     Resume,
+    /// Pause if playing, resume if not.
+    PlayPause,
     Stop,
     Next,
     Previous,
     Seek(Duration),
+    /// Move by this many milliseconds, negative for backwards.
+    SeekBy(i64),
     SetVolume(f32),
     /// Jump to a row of the current snapshot (§9.2).
     SetPosition(usize),
@@ -224,6 +228,14 @@ impl Engine {
                 self.start_current();
                 self.emit(Event::QueueChanged(self.source.clone()));
             }
+            EngineCommand::PlayPause => {
+                let next = if self.state == PlaybackState::Playing {
+                    EngineCommand::Pause
+                } else {
+                    EngineCommand::Resume
+                };
+                self.handle(next);
+            }
             EngineCommand::Pause => {
                 if self.state == PlaybackState::Playing {
                     self.backend.pause();
@@ -246,6 +258,23 @@ impl Engine {
                 if self.source.previous().is_some() {
                     self.start_current();
                 }
+            }
+            EngineCommand::SeekBy(millis) => {
+                // Resolved here because this is where the current position
+                // actually lives; anywhere else would be working from a copy
+                // that is already a frame or two old.
+                let current =
+                    i64::try_from(self.backend.position().as_millis()).unwrap_or(i64::MAX);
+                let target = current.saturating_add(millis).max(0);
+                let target = Duration::from_millis(target.unsigned_abs());
+
+                // Clamped to the track, so seeking past the end lands at the
+                // end rather than wherever the decoder decides.
+                let target = match self.current_ref() {
+                    Some(track) => target.min(track.duration),
+                    None => target,
+                };
+                self.handle(EngineCommand::Seek(target));
             }
             EngineCommand::Seek(position) => {
                 if let Err(e) = self.backend.seek(position) {

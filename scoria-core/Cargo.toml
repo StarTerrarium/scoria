@@ -15,6 +15,7 @@ toml.workspace = true
 lofty.workspace = true
 notify.workspace = true
 rodio.workspace = true
+souvlaki.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

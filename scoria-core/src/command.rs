@@ -49,6 +49,12 @@ pub enum Command {
     },
     Pause,
     Resume,
+    /// Pause if playing, resume if not.
+    ///
+    /// Distinct from `Pause` and `Resume` because a caller may not know which
+    /// applies: a media key and a desktop panel both send one button, and
+    /// making them ask first would be a race.
+    PlayPause,
     /// Stop and discard the current position.
     ///
     /// Resolves the other gap §14 recorded. It exists because MPRIS defines a
@@ -58,6 +64,12 @@ pub enum Command {
     Next,
     Previous,
     Seek(Duration),
+    /// Move by this many milliseconds, negative for backwards.
+    ///
+    /// Relative because that is what a desktop's seek control offers, and
+    /// converting it to an absolute position needs the current one -- which
+    /// only the engine reliably has.
+    SeekBy(i64),
     /// Linear amplitude, 0.0 to 1.0. Distinct from ReplayGain, which is applied
     /// per track from tags (§6.7) and is not user-facing.
     SetVolume(f32),

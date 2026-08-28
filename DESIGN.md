@@ -69,10 +69,12 @@ pub enum Command {
     PlayFrom { source: SourceSpec, at: TrackId },
     Pause,
     Resume,
+    PlayPause,
     Stop,
     Next,
     Previous,
     Seek(Duration),
+    SeekBy(i64),        // milliseconds, negative for backwards
     SetVolume(f32),
     SetPosition(usize),
     SetShuffle(bool),
@@ -99,6 +101,8 @@ pub enum Event {
     Error(CoreError),
 }
 ```
+
+The desktop's media controls are just another source of `Command`s, which is why they needed almost no new vocabulary. Two additions were genuinely missing, though, and both are useful beyond MPRIS: `PlayPause`, because a media key is one button and making the caller ask the state first would be a race; and `SeekBy`, because a desktop's seek control is relative and turning that into a position needs the current one, which only the engine reliably has.
 
 `SourceSpec` is how §6.3's play-behaviour setting reaches the core. `Shown`
 carries the track list explicitly rather than a `Selection`, because the view
@@ -590,7 +594,7 @@ Themes are defined as serialisable data even while compiled in, so user themes l
 | Database | rusqlite 0.40, `bundled` | Compiles SQLite into the binary |
 | Search | SQLite FTS5, `trigram` tokenizer | `unicode61` only matches whole tokens, so `lect` would not find `Electric Callboy`. Trigram matches substrings in any script. Its floor of three characters is covered by a `LIKE` fallback, which matters because two-character queries are ordinary in Japanese |
 | Watching | notify | |
-| MPRIS | souvlaki 0.8 | Media keys, playerctl, desktop controls |
+| MPRIS | souvlaki 0.8 | Media keys, playerctl, desktop controls. Lives in the core: a headless session should still answer a media key, and the TUI should not have to reimplement it. souvlaki is not a UI crate, so invariant 1 is untouched |
 | Licence | GPL-3.0 | |
 
 **On egui:** viable, and there is prior experience with it, but rejected for two project-specific reasons. It ships no CJK glyphs and needs manual font-chain setup, which is a poor fit for a library where every string comes from arbitrary tag metadata. And immediate mode makes violating the core/UI seam the path of least resistance — `if ui.button("Play").clicked() { self.library.play(id) }` reaches straight through it. Given the code is largely agent-written and not closely reviewed, the framework should make good architecture mandatory rather than aspirational.

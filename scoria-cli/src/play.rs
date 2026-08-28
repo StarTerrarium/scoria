@@ -53,6 +53,12 @@ pub fn run(session: &mut Session, out: &mut Out, query: Option<&str>, shuffle: b
         "type a key and press Enter -- p pause, n next, b back, s shuffle, r repeat, q quit\n"
     )?;
 
+    // Media keys work here too. Playing from a terminal is still playing, and
+    // the desktop has no reason to care which frontend asked.
+    if let Err(e) = session.start_media_controls() {
+        writeln!(out, "  media keys unavailable: {e}")?;
+    }
+
     session
         .handle(Command::PlayFrom {
             source: spec,

@@ -13,6 +13,7 @@ pub mod error;
 pub mod event;
 pub mod id;
 pub mod library;
+pub mod media_controls;
 pub mod model;
 pub mod path;
 pub mod playback;

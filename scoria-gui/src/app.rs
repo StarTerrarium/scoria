@@ -171,6 +171,7 @@ impl App {
         app.settings = settings;
         app.refresh();
         app.begin_watching();
+        app.begin_media_controls();
         Ok(app)
     }
 
@@ -239,6 +240,20 @@ impl App {
                 self.status = "no library root set -- run `scoria scan <path>`".to_owned();
             }
             Err(e) => self.status = format!("cannot watch the library: {e}"),
+        }
+    }
+
+    /// Connects to the desktop's media controls (§12).
+    ///
+    /// A desktop with no MPRIS support, or no session bus at all, is a normal
+    /// thing to run on: the failure is noted and the player carries on without
+    /// media keys rather than refusing to start.
+    fn begin_media_controls(&mut self) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        if let Err(e) = session.start_media_controls() {
+            self.status = format!("media keys unavailable: {e}");
         }
     }
 
@@ -352,7 +367,12 @@ impl App {
 
     /// Reads the core's event stream. The only direction information flows in.
     fn drain_core_events(&mut self) {
-        let Some(session) = &self.session else { return };
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        // Mutable because this is also where the desktop's media controls are
+        // served: what they asked for is applied, and what is playing is
+        // published back to them.
         let events = session.drain_events();
         let mut library_changed = None;
         for event in events {

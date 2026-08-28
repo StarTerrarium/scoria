@@ -15,11 +15,12 @@ use crate::config::{LibraryConfig, Paths, PlayBehaviour};
 use crate::db::repository::TrackRepository;
 use crate::db::sqlite::SqliteDatabase;
 use crate::error::CoreError;
-use crate::event::{Event, LibraryDelta};
+use crate::event::{Event, LibraryDelta, PlaybackState};
 use crate::id::{AlbumId, QueryId, TrackId};
 use crate::library::artwork::ArtworkKey;
 use crate::library::scanner::{ScanOutcome, ScanProgress, Scanner};
 use crate::library::{ArtworkCache, LibraryWatcher};
+use crate::media_controls::MediaBridge;
 use crate::playback::backend::AudioBackend;
 use crate::playback::engine::{EngineCommand, PlaybackHandle, spawn};
 use crate::playback::resolver::IndexResolver;
@@ -48,6 +49,13 @@ pub struct Session {
     playback: Option<PlaybackHandle>,
     /// Watches the root and rescans in the background. See [`Session::start_watching`].
     watcher: Option<WatchHandle>,
+    /// The desktop's media controls, if this desktop has any.
+    media: Option<MediaBridge>,
+    /// What the media controls were last told about, kept because they need it
+    /// and nothing else here does.
+    playing: Option<TrackId>,
+    playback_state: PlaybackState,
+    position: Duration,
 }
 
 /// How long the watch thread waits before checking whether it should stop.
@@ -100,6 +108,10 @@ impl Session {
             inbox,
             playback: None,
             watcher: None,
+            media: None,
+            playing: None,
+            playback_state: PlaybackState::Stopped,
+            position: Duration::ZERO,
         })
     }
 
@@ -146,21 +158,107 @@ impl Session {
         self.queries.run(&self.index, &self.db, selection)
     }
 
+    /// Connects to the desktop's media controls (§12).
+    ///
+    /// Optional by design: a machine with no session bus, or a desktop with no
+    /// MPRIS support, is a normal thing to run on. Failing to connect is
+    /// reported and then ignored.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Database`] if the platform's controls cannot be reached.
+    pub fn start_media_controls(&mut self) -> Result<(), CoreError> {
+        if self.media.is_none() {
+            self.media = Some(MediaBridge::new()?);
+        }
+        Ok(())
+    }
+
     /// Events produced since the last call, in order.
     ///
-    /// One stream: playback, scanning and queries all arrive here.
-    pub fn drain_events(&self) -> Vec<Event> {
+    /// One stream: playback, scanning and queries all arrive here. This is also
+    /// where the desktop's controls are served -- anything they asked for is
+    /// applied first, so its effects arrive in the same batch, and whatever
+    /// the batch says about playback is published back to them.
+    pub fn drain_events(&mut self) -> Vec<Event> {
+        self.serve_media_controls();
+
         let mut events = Vec::new();
         while let Ok(event) = self.inbox.try_recv() {
+            self.observe(&event);
             events.push(event);
         }
+
+        self.publish_media_state();
         events
     }
 
+    /// Applies whatever the desktop's controls have asked for.
+    ///
+    /// Called by both ways of reading the event stream. Putting it in only one
+    /// of them meant a frontend using the other -- the command line does --
+    /// registered on the bus and then never answered it.
+    fn serve_media_controls(&mut self) {
+        let requested = self
+            .media
+            .as_ref()
+            .map(MediaBridge::take_commands)
+            .unwrap_or_default();
+        for command in requested {
+            // A desktop asking for something impossible is not worth
+            // interrupting anyone over; `handle` reports it as an event already.
+            let _ = self.handle(command);
+        }
+    }
+
+    /// Keeps the little playback state the media controls need.
+    fn observe(&mut self, event: &Event) {
+        match event {
+            Event::TrackChanged { track, .. } => {
+                self.playing = Some(*track);
+                self.position = Duration::ZERO;
+            }
+            Event::PositionChanged(position) => self.position = *position,
+            Event::PlaybackStateChanged(state) => {
+                self.playback_state = *state;
+                if *state == PlaybackState::Stopped {
+                    self.playing = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn publish_media_state(&mut self) {
+        let Some(media) = &mut self.media else { return };
+        let track = self.playing.and_then(|id| self.index.track(id));
+        let artwork = track
+            .and_then(|track| self.index.album(track.album_id))
+            .and_then(|album| self.artwork.get(&ArtworkKey::from_stored(&album.identity)));
+
+        media.publish(
+            self.playback_state,
+            track,
+            self.position,
+            artwork.as_deref(),
+        );
+    }
+
     /// Blocks for the next event, up to `timeout`.
-    #[must_use]
-    pub fn next_event(&self, timeout: std::time::Duration) -> Option<Event> {
-        self.inbox.recv_timeout(timeout).ok()
+    ///
+    /// Serves the desktop's controls and publishes state exactly as
+    /// [`Session::drain_events`] does: both are ways of reading the same
+    /// stream, and a frontend should not have to know which one keeps the media
+    /// keys alive.
+    pub fn next_event(&mut self, timeout: std::time::Duration) -> Option<Event> {
+        self.serve_media_controls();
+
+        let event = self.inbox.recv_timeout(timeout).ok();
+        if let Some(event) = &event {
+            self.observe(event);
+        }
+        self.publish_media_state();
+        event
     }
 
     fn emit(&self, event: Event) {
@@ -351,11 +449,13 @@ impl Session {
                 self.start(source)
             }
             Command::Pause => self.send_to_engine(EngineCommand::Pause),
+            Command::PlayPause => self.send_to_engine(EngineCommand::PlayPause),
             Command::Resume => self.send_to_engine(EngineCommand::Resume),
             Command::Stop => self.send_to_engine(EngineCommand::Stop),
             Command::Next => self.send_to_engine(EngineCommand::Next),
             Command::Previous => self.send_to_engine(EngineCommand::Previous),
             Command::Seek(position) => self.send_to_engine(EngineCommand::Seek(position)),
+            Command::SeekBy(millis) => self.send_to_engine(EngineCommand::SeekBy(millis)),
             Command::SetVolume(v) => self.send_to_engine(EngineCommand::SetVolume(v)),
             Command::SetPosition(p) => self.send_to_engine(EngineCommand::SetPosition(p)),
             Command::SetShuffle(on) => self.send_to_engine(EngineCommand::SetShuffle(on)),
