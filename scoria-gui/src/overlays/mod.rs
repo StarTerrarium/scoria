@@ -85,6 +85,81 @@ pub fn toggle(current: Option<Overlay>, requested: Overlay) -> Option<Overlay> {
     }
 }
 
+/// An overlay on screen, and where it is in its transition.
+///
+/// Closing is a state rather than an absence, because an overlay that vanished
+/// the instant it was dismissed would be lopsided against one that rises: the
+/// same motion has to run backwards.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Presenting {
+    pub overlay: Overlay,
+    /// When the current transition started.
+    pub since: Instant,
+    pub closing: bool,
+}
+
+impl Presenting {
+    #[must_use]
+    pub fn opening(overlay: Overlay, now: Instant) -> Self {
+        Self {
+            overlay,
+            since: now,
+            closing: false,
+        }
+    }
+
+    /// Starts retracting, from wherever the opening transition had reached.
+    ///
+    /// Rewinding rather than restarting: dismissing a drawer that is still
+    /// rising should retract from its current height, not jump to full and fall.
+    #[must_use]
+    pub fn closing(self, now: Instant) -> Self {
+        if self.closing {
+            return self;
+        }
+        // The rewind has to happen in *linear* time, not in eased output.
+        // Subtracting an eased fraction from the clock lands somewhere else on
+        // the curve, and the drawer jumps at the moment of dismissal.
+        //
+        // Solving `1 - ease(p) = shown` for the cubic ease-out gives
+        // `p = 1 - cbrt(shown)`.
+        let shown = progress(self.since, now).clamp(0.0, 1.0);
+        let already_retracted = OPEN_DURATION.mul_f32(1.0 - shown.cbrt());
+        Self {
+            overlay: self.overlay,
+            since: now.checked_sub(already_retracted).unwrap_or(now),
+            closing: true,
+        }
+    }
+
+    /// How much of the drawer is showing, 0 to 1.
+    #[must_use]
+    pub fn shown(self, now: Instant) -> f32 {
+        let p = progress(self.since, now);
+        if self.closing { 1.0 - p } else { p }
+    }
+
+    /// Whether the transition has finished and the overlay can be dropped.
+    #[must_use]
+    pub fn is_finished(self, now: Instant) -> bool {
+        self.closing && progress(self.since, now) >= 1.0
+    }
+
+    /// What the rest of the application should consider open.
+    ///
+    /// A closing overlay is already gone as far as anything but drawing is
+    /// concerned: pressing its key again should reopen it rather than close
+    /// something that is on its way out.
+    #[must_use]
+    pub const fn effective(self) -> Option<Overlay> {
+        if self.closing {
+            None
+        } else {
+            Some(self.overlay)
+        }
+    }
+}
+
 /// How long an overlay takes to appear.
 ///
 /// Short enough not to be a wait, long enough to be seen. The complaint it
@@ -268,6 +343,90 @@ mod tests {
                 overlay.max_height()
             );
         }
+    }
+
+    #[test]
+    fn closing_runs_the_same_motion_backwards() {
+        let start = Instant::now();
+        let open = Presenting::opening(Overlay::Queue, start);
+        assert!(open.shown(start) < 0.01);
+        assert!(open.shown(start + OPEN_DURATION) > 0.99);
+
+        let shut = open.closing(start + OPEN_DURATION);
+        assert!(
+            shut.shown(start + OPEN_DURATION) > 0.99,
+            "should start from full"
+        );
+        assert!(
+            shut.shown(start + OPEN_DURATION * 2) < 0.01,
+            "should end at nothing"
+        );
+    }
+
+    #[test]
+    fn dismissing_mid_rise_retracts_from_where_it_reached() {
+        // Restarting the clock would make a half-open drawer jump to full and
+        // then fall, which is worse than not animating at all.
+        let start = Instant::now();
+        let halfway = start + OPEN_DURATION / 3;
+
+        let open = Presenting::opening(Overlay::Queue, start);
+        let shown = open.shown(halfway);
+        let shut = open.closing(halfway);
+
+        assert!(
+            (shut.shown(halfway) - shown).abs() < 0.02,
+            "jumped from {shown} to {}",
+            shut.shown(halfway)
+        );
+    }
+
+    #[test]
+    fn a_closing_overlay_is_already_gone_to_everything_but_drawing() {
+        // Pressing its key again should reopen it, not close something that is
+        // already on its way out.
+        let now = Instant::now();
+        let shut = Presenting::opening(Overlay::Queue, now).closing(now);
+        assert_eq!(shut.effective(), None);
+        assert_eq!(
+            toggle(shut.effective(), Overlay::Queue),
+            Some(Overlay::Queue)
+        );
+    }
+
+    #[test]
+    fn a_finished_close_can_be_dropped() {
+        let start = Instant::now();
+        let shown = start + OPEN_DURATION;
+        let shut = Presenting::opening(Overlay::Queue, start).closing(shown);
+
+        assert!(!shut.is_finished(shown), "should still be retracting");
+        assert!(shut.is_finished(shown + OPEN_DURATION), "should be done");
+    }
+
+    #[test]
+    fn dismissing_one_that_never_appeared_is_immediate() {
+        // Nothing to retract, so nothing to watch retract.
+        let now = Instant::now();
+        let shut = Presenting::opening(Overlay::Queue, now).closing(now);
+        assert!(shut.is_finished(now));
+    }
+
+    #[test]
+    fn an_opening_overlay_is_never_finished() {
+        // Dropping one that is still rising would make it vanish mid-animation.
+        let now = Instant::now();
+        let open = Presenting::opening(Overlay::Queue, now);
+        assert!(!open.is_finished(now));
+        assert!(!open.is_finished(now + OPEN_DURATION * 10));
+    }
+
+    #[test]
+    fn closing_twice_does_not_restart_the_retraction() {
+        let now = Instant::now();
+        let shut = Presenting::opening(Overlay::Queue, now).closing(now);
+        let again = shut.closing(now + OPEN_DURATION / 2);
+        assert_eq!(shut.since, again.since);
     }
 
     #[test]

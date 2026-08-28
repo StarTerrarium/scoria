@@ -104,9 +104,8 @@ pub struct App {
 
     /// Which overlay is open. One `Option`, so §9's "one at a time, never
     /// stacked" cannot be expressed otherwise.
-    overlay: Option<Overlay>,
-    /// When the current overlay started appearing, for the opening transition.
-    overlay_since: Option<std::time::Instant>,
+    /// What is on screen, including anything still retracting.
+    overlay: Option<overlays::Presenting>,
     /// The playback snapshot, as the engine last reported it. This is what the
     /// queue shows -- §6.2's `tracks`, not the current view.
     queue: Option<scoria_core::PlaybackSource>,
@@ -166,7 +165,6 @@ impl App {
             viewport_height: 650.0,
             status,
             overlay: None,
-            overlay_since: None,
             queue: None,
             queue_lines: Vec::new(),
             queue_scroll: 0.0,
@@ -252,7 +250,10 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Tick => self.drain_core_events(),
+            Message::Tick => {
+                self.drain_core_events();
+                self.tick_overlay();
+            }
             Message::Table(event) => self.on_table(event),
             Message::Transport(event) => return self.on_transport(event),
             Message::SearchChanged(query) => {
@@ -437,17 +438,17 @@ impl App {
 
     /// Opens, closes or replaces an overlay, and prepares whatever it needs.
     fn open_overlay(&mut self, requested: Overlay) -> Task<Message> {
-        self.set_overlay(overlays::toggle(self.overlay, requested));
+        self.set_overlay(overlays::toggle(self.open_overlay_kind(), requested));
 
         // Reading a file's tags is I/O, so it happens once on open rather than
         // in the view, which runs every frame.
-        if let Some(Overlay::Properties(id)) = self.overlay {
+        if let Some(Overlay::Properties(id)) = self.open_overlay_kind() {
             self.load_properties(id);
         }
 
         // The queue opens showing where you are, which means scrolled to it.
         // §9.2 asks for the current position marked *and* scrolled into view.
-        if self.overlay == Some(Overlay::Queue) {
+        if self.open_overlay_kind() == Some(Overlay::Queue) {
             let position = self
                 .queue
                 .as_ref()
@@ -472,19 +473,42 @@ impl App {
     /// Every path that opens or replaces one goes through here. A second
     /// overlay appearing fully formed, because only the first reset the clock,
     /// is exactly the "did anything happen?" problem this exists to solve.
-    fn set_overlay(&mut self, overlay: Option<Overlay>) {
-        if overlay == self.overlay {
-            return;
+    fn set_overlay(&mut self, requested: Option<Overlay>) {
+        let now = std::time::Instant::now();
+        match (requested, self.overlay) {
+            // Dismissed: retract rather than vanish.
+            (None, Some(open)) => self.overlay = Some(open.closing(now)),
+            (None, None) => {}
+            (Some(overlay), current) => {
+                if current.and_then(overlays::Presenting::effective) == Some(overlay) {
+                    return;
+                }
+                self.overlay = Some(overlays::Presenting::opening(overlay, now));
+            }
         }
-        self.overlay_since = overlay.is_some().then(std::time::Instant::now);
-        self.overlay = overlay;
+    }
+
+    /// What is open, ignoring anything on its way out.
+    fn open_overlay_kind(&self) -> Option<Overlay> {
+        self.overlay.and_then(overlays::Presenting::effective)
+    }
+
+    /// Drops an overlay once it has finished retracting.
+    ///
+    /// Runs on the tick that already exists, so the drawer keeps being drawn
+    /// while it retracts and disappears only when there is nothing left of it.
+    fn tick_overlay(&mut self) {
+        if let Some(state) = self.overlay
+            && state.is_finished(std::time::Instant::now())
+        {
+            self.overlay = None;
+        }
     }
 
     /// How far through its opening transition the overlay is.
     fn overlay_progress(&self) -> f32 {
-        self.overlay_since.map_or(1.0, |since| {
-            overlays::progress(since, std::time::Instant::now())
-        })
+        self.overlay
+            .map_or(0.0, |state| state.shown(std::time::Instant::now()))
     }
 
     /// Reads the file's own tags for the properties overlay.
@@ -598,7 +622,10 @@ impl App {
             // §9.1: the resting state is the thumbnail; clicking it opens the
             // playing track's art full size.
             transport::Event::ShowArtwork => {
-                self.set_overlay(overlays::toggle(self.overlay, Overlay::Artwork(None)));
+                self.set_overlay(overlays::toggle(
+                    self.open_overlay_kind(),
+                    Overlay::Artwork(None),
+                ));
                 return Task::none();
             }
         };
@@ -665,7 +692,7 @@ impl App {
                 // §9: Escape closes the overlay. With none open it clears the
                 // filters instead -- one key backing out of whatever is
                 // currently narrowing the view.
-                if self.overlay.is_none() {
+                if self.open_overlay_kind().is_none() {
                     self.clear_filters();
                 } else {
                     self.set_overlay(None);
@@ -911,10 +938,12 @@ impl App {
         });
         // Handed to the layout rather than wrapped around the finished view, so
         // it covers the explorer and leaves the transport reachable.
-        let overlay = self.overlay.map(|overlay| {
+        // Drawn while retracting too, which is what makes closing an animation
+        // rather than a disappearance.
+        let overlay = self.overlay.map(|state| {
             overlays::present(
-                overlay,
-                self.overlay_content(overlay),
+                state.overlay,
+                self.overlay_content(state.overlay),
                 &self.theme,
                 self.overlay_progress(),
                 Message::CloseOverlay,
