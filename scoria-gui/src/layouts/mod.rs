@@ -64,8 +64,25 @@ pub struct Browser<'a, Message> {
     pub artwork: Element<'a, Message, Theme>,
 }
 
-/// How much table width the `Left` placement costs (§7.1).
-const LEFT_WIDTH: f32 = 250.0;
+/// Width of one pane in the `Left` placement.
+///
+/// Two of them, side by side, so the placement costs about twice this. §7.1
+/// budgeted 250px for a single stacked column; side by side costs more and buys
+/// two things worth the width. Each pane is genuinely full height, which is
+/// what §7.1 asks for and what stacking cannot give. And the cascade reads left
+/// to right -- artist narrows album narrows tracks -- so the arrangement states
+/// the causality instead of leaving it to be inferred from two lists in a
+/// column.
+const LEFT_PANE_WIDTH: f32 = 230.0;
+
+// Album titles are the long ones -- "The First Eden - Seeds Of Hope" is real --
+// and a pane that ellipsises most of them makes the cascade guesswork. Two of
+// them also have to leave the table usable.
+const _: () = assert!(LEFT_PANE_WIDTH >= 200.0, "too narrow to read album titles");
+const _: () = assert!(
+    LEFT_PANE_WIDTH <= 300.0,
+    "two of these would crowd the table"
+);
 /// Tall enough for the artwork, which is what raises the strip from four
 /// artist rows to about ten and makes `Top` viable at all (§7.1).
 const TOP_HEIGHT: f32 = 220.0;
@@ -101,11 +118,16 @@ pub fn arrange<'a, Message: 'a>(
     let body: Element<'a, Message, Theme> = match (placement, browser) {
         (BrowserPlacement::Off, _) | (_, None) => table,
 
-        // §7.1: panes full height, many artists visible, at the cost of about
-        // 250px of table width.
+        // §7.1: panes full height, many artists visible, at the cost of table
+        // width. Side by side rather than stacked, so each pane really is full
+        // height and the cascade runs in the direction it flows.
         (BrowserPlacement::Left, Some(browser)) => iced::widget::row![
-            column![browser.artists, rule(theme), browser.albums]
-                .width(Length::Fixed(LEFT_WIDTH))
+            container(browser.artists)
+                .width(Length::Fixed(LEFT_PANE_WIDTH))
+                .height(Fill),
+            vertical_rule(theme),
+            container(browser.albums)
+                .width(Length::Fixed(LEFT_PANE_WIDTH))
                 .height(Fill),
             vertical_rule(theme),
             table,
@@ -186,14 +208,6 @@ mod tests {
     #[test]
     fn the_default_is_the_one_1_0_opens_with() {
         assert_eq!(BrowserPlacement::default(), BrowserPlacement::Off);
-    }
-
-    #[test]
-    fn the_left_placement_costs_the_width_the_design_budgets() {
-        // §7.1 puts a number on it: roughly 250px of table width. Worth
-        // asserting, because the whole character of the placement is that it
-        // trades table width for visible artists.
-        assert!((LEFT_WIDTH - 250.0).abs() < f32::EPSILON);
     }
 
     #[test]

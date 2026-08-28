@@ -351,9 +351,11 @@ The table, columns, transport bar, search field, selection model and keybinds ar
 
 | Placement | Character |
 |---|---|
-| `Left` | Panes full height. Many artists visible. Costs ~250 px of table width. |
+| `Left` | Panes side by side, each full height. Many artists visible. Costs ~460 px of table width. |
 | `Top` | Panes in a horizontal strip with now-playing artwork. Full table width, ~10 artist rows. |
 | `Off` | Single continuous table, album group headers, navigate by search and type-to-jump. |
+
+**In `Left` the panes sit side by side, not stacked.** Stacking them gives each half the height, which is not what "full height" means and halves the artists in view. Side by side also puts the cascade in the direction it flows: album artist narrows album narrows tracks, reading left to right, so the arrangement states the causality rather than leaving it to be inferred from two lists in a column. It costs roughly twice the width, and that is the trade.
 
 The claustrophobic feeling in `Top` comes from fewer visible artist rows, not from table width. Sizing the strip to fit the artwork raises it from four rows to about ten, which is what makes that layout viable. The artwork is not decoration filling leftover space; it justifies a strip height the panes need anyway.
 
