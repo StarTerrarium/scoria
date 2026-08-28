@@ -387,7 +387,13 @@ A drag-and-drop chain builder is a DIY layout system wearing different clothes. 
 
 Clicking a column header applies a **transient override** on top of the configured sort, with a visible indicator and one action to drop back. It never replaces the configured chain. Same relationship the queue snapshot has to the library: a temporary state you can always return from.
 
-**Grouping** is derived, not configured: insert a header row whenever the primary sort key's value changes. It is therefore only meaningful when the chain starts with the grouped field. Sorting by duration switches grouping off automatically. Group headers are click targets for playing the whole album.
+**Grouping** is derived, not configured: insert a header row whenever the primary sort key's value changes. It is therefore only meaningful when the chain starts with the grouped field. Sorting by duration switches grouping off automatically.
+
+**Group headers are not click targets.** An earlier version of this section made them play their group on a single click. That made the most destructive action available in the table -- replacing the playback snapshot -- the easiest one to trigger by accident, while every other activation is a double-click. §6.1 is explicit that browsing never disturbs playback, and a stray click on a header is browsing.
+
+It also bought nothing. The group's first track sits one row below, and double-clicking it does the same thing. A header click would earn its place if groups could collapse, because then it would be the only way to reach the group at all -- but collapsible groups are not in this design, and adding them to justify a click target would be the tail wagging the dog.
+
+Note also that the header of a group is not generally an album. With the default chain the primary key is album artist, so headers are artists; "play the album" was never what the click did.
 
 ### 7.4 Unavailable tracks
 

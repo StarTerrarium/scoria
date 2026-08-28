@@ -34,11 +34,12 @@ const OVERSCAN: usize = 6;
 pub enum Line {
     /// A group header (§7.3), inserted where the primary sort key changes.
     ///
-    /// Carries the row its group starts at, not just a label. Without it the
-    /// click site has only a *line* index, and line and row indices diverge by
-    /// one per header above -- which is exactly the bug this replaced: clicking
-    /// a band header played a track further down the list, one further for
-    /// every header preceding it.
+    /// Carries the row its group starts at as well as its label. Nothing reads
+    /// that yet -- headers are inert (see [`group_header`]) -- but §7.1 makes
+    /// type-to-jump the way `Off` placement is navigated, and jumping to a
+    /// group means landing on the row it starts at. The flattening already
+    /// knows the answer, so it says so rather than making the caller rederive
+    /// it from line indices, which is what produced the bug this replaced.
     Header { label: String, first_row: usize },
     /// A track, by its index into the query result.
     Track(usize),
@@ -112,9 +113,7 @@ pub struct TableView<'a> {
 pub enum Event {
     /// A row was clicked: select it.
     Select(usize),
-    /// A row was double-clicked, or a group header clicked: play from here.
-    ///
-    /// §7.3: group headers are click targets for playing the whole album.
+    /// A row was double-clicked: play from here.
     Activate(usize),
     /// Right-click, which §9.1 makes the one escape hatch from artwork
     /// following playback.
@@ -154,9 +153,7 @@ pub fn view<'a, Message: Clone + 'a>(
                 break;
             };
             rows = rows.push(match line {
-                Line::Header { label, first_row } => {
-                    group_header(label, *first_row, table.theme, &on_event)
-                }
+                Line::Header { label, .. } => group_header(label, table.theme),
                 Line::Track(row_index) => match table.rows.get(*row_index) {
                     Some(track) => track_row(track, *row_index, &table, &on_event),
                     None => Space::new().height(Length::Fixed(ROW_HEIGHT)).into(),
@@ -210,11 +207,22 @@ fn header<'a, Message: 'a>(theme: &Theme) -> Element<'a, Message, Theme> {
     .into()
 }
 
+/// A group header.
+///
+/// **Deliberately not a click target**, though §7.3 originally called for one.
+/// Playing a group on a single click made the most destructive action in the
+/// table -- replacing the playback snapshot -- the easiest one to trigger by
+/// accident, while every other activation is a double-click. §6.1 is explicit
+/// that browsing never disturbs playback, and a stray click on a header is
+/// browsing.
+///
+/// It also bought nothing: the group's first track sits one row below, and
+/// double-clicking it does the same thing. A header click would earn its place
+/// if groups could collapse, since then it would be the only way to reach the
+/// group at all -- but collapse is not in the design.
 fn group_header<'a, Message: Clone + 'a>(
     label: &str,
-    first_row: usize,
     theme: &Theme,
-    on_event: &impl Fn(Event) -> Message,
 ) -> Element<'a, Message, Theme> {
     let style = theme.group_header_style();
     let content = container(text(label.to_owned()).size(13))
@@ -224,11 +232,7 @@ fn group_header<'a, Message: Clone + 'a>(
         .width(Fill)
         .style(move |_theme: &Theme| style);
 
-    // §7.3: group headers are click targets for playing the group they head.
-    // `first_row`, not the line index -- see the note on `Line::Header`.
-    mouse_area(content)
-        .on_press(on_event(Event::Activate(first_row)))
-        .into()
+    content.into()
 }
 
 fn track_row<'a, Message: Clone + 'a>(
@@ -354,10 +358,10 @@ mod tests {
 
     #[test]
     fn a_header_names_the_row_its_group_starts_at() {
-        // The bug this replaced: the header emitted its *line* index, and line
-        // and row indices diverge by one for every header above. Clicking the
-        // first band played its first track by luck; the second band played its
-        // second track, the third band its third, and so on.
+        // Headers are inert now, but the mapping still has to be right: §7.1's
+        // type-to-jump lands on the row a group starts at, and the bug this
+        // guards against was exactly that arithmetic -- line and row indices
+        // diverge by one for every header above.
         let lines = build_lines(
             25,
             &[group("a", 0, 13), group("b", 13, 10), group("c", 23, 2)],
