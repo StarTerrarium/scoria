@@ -98,6 +98,7 @@ pub enum Event {
     QueryResult(QueryId, Vec<TrackId>),
     ScanProgress { seen: usize, total: Option<usize> },
     LibraryChanged(LibraryDelta),
+    ScanFinished,
     Error(CoreError),
 }
 ```
@@ -231,6 +232,14 @@ The tiebreaker is guaranteed by the `SortChain` constructor rather than by conve
 
 One folder. First run is a single "point me at your library" picker.
 
+**As built.** The explorer -- the region that would list tracks -- explains why it cannot, and offers the folder chooser. Four states, chosen by a pure function of what the frontend already knows: no root yet, a first scan running, a scan that finished and found nothing, and a library that would not open at all. The last is the only one with no chooser, because choosing a folder cannot fix a database that will not open, and offering it invites someone to try until they believe their music is at fault.
+
+It is deliberately **not** an overlay. Every drawer in §9 rises over an explorer that is already there, and each is dismissible because there is something behind it to go back to. On first run there is nothing behind it, so a dismissible prompt would leave an empty table and no stated reason for it. Taking the table's place instead keeps the window's shape: the transport bar and the header buttons stay where they are, and only the part that would list tracks differs. It is not a layout either (invariant 3) -- it defines no table and no pane, and `arrange` is handed a different element.
+
+**The scan-in-flight state is not cosmetic.** The first scan of a real library takes long enough that, without it, waiting is indistinguishable from having chosen the wrong folder -- and those need different words. It is entered when watching starts rather than when the first progress event arrives, so the gap between choosing a folder and reading it is not reported as an empty library.
+
+**The chooser does not open itself.** A portal dialog appearing before the application has been seen is disorienting, and cancelling it lands someone back at a blank window with no explanation. A button is one more click and always recoverable. It opens at the configured root when there is one, and otherwise at the desktop's own music directory (`XDG_MUSIC_DIR`, then `~/Music`), because opening at the filesystem root asks someone to navigate to a place the system already knows.
+
 Multiple roots and named libraries are explicitly out of scope. Music spread across several locations is treated as an edge case; if it turns out not to be, revisit then. This decision removes a library id from the schema, per-root settings, and path disambiguation.
 
 ### 5.2 Scanning
@@ -238,7 +247,8 @@ Multiple roots and named libraries are explicitly out of scope. Music spread acr
 - `notify` watches the root continuously, and a change triggers a rescan without being asked.
 - **Scanning runs on its own thread with its own database handle**, never on the frontend's. A scan of a large library takes seconds, and doing it inline would freeze the window every time a file landed. This is what the WAL journal is for: the scan writes while the frontend keeps reading.
 - **A scan runs once at startup**, to catch up on whatever changed while nothing was running. Watching only reports events it was present for, so without this a library edited between sessions stays stale until it is edited again. It is silent when it finds nothing.
-- A frontend learns about all of this through the ordinary event stream -- `ScanProgress`, then `LibraryChanged`. It must reload its index when one arrives: the scan ran against a different handle, so the index it queries is a copy.
+- A frontend learns about all of this through the ordinary event stream -- `ScanProgress` while it runs, `LibraryChanged` for anything that changed, and `ScanFinished` last, always. It must reload its index when a `LibraryChanged` arrives: the scan ran against a different handle, so the index it queries is a copy.
+- **`ScanFinished` exists because "silent when it finds nothing" is not observable.** A scan that changes nothing emits no deltas, so a frontend that had started saying "scanning" had no way to learn it had stopped, and would say it forever -- which is exactly what pointing at an empty folder does on first run. It terminates the sequence in every case, including after `Error`.
 - An explicit rescan is always available. Watching cannot see everything -- a network mount, a filesystem that reports no events -- so the manual path is not a convenience.
 - Files that disappear are marked unavailable rather than deleted (§7.4).
 - FLAC is the first-class target for 1.0; broad format support is a pre-1.0-release requirement but comes after the FLAC path works end to end.

@@ -14,7 +14,7 @@ use crate::overlays::{self, Overlay};
 use crate::settings::Settings;
 use crate::theme::Theme;
 use crate::widgets::columns::Column;
-use crate::widgets::{panes, table, transport};
+use crate::widgets::{panes, table, transport, welcome};
 use iced::widget::{button, container, row, text, text_input};
 use iced::{Element, Fill, Length, Subscription, Task};
 use scoria_core::command::Command;
@@ -60,6 +60,7 @@ pub enum Message {
     Queue(table::Event),
     Columns(overlays::columns::Event),
     Settings(overlays::settings::Event),
+    Welcome(welcome::Event),
     /// The folder picker finished. `None` means it was cancelled.
     RootChosen(Option<std::path::PathBuf>),
     CloseOverlay,
@@ -77,6 +78,9 @@ pub struct App {
     /// says why: §5.1 makes first run a "point me at your library" moment, and
     /// a failure to read the database is the same shape of problem.
     session: Option<Session>,
+    /// Why there is no session, when there is not one. What the explorer says
+    /// in place of the track list (§5.1).
+    problem: Option<String>,
     theme: Theme,
     keymap: Keymap,
     placement: BrowserPlacement,
@@ -132,6 +136,12 @@ pub struct App {
     scroll_offset: f32,
     viewport_height: f32,
     status: String,
+    /// A scan in flight, as the last `ScanProgress` reported it.
+    ///
+    /// Held rather than left to the status line, because on first run it is the
+    /// difference between "this is taking a while" and "this found nothing",
+    /// and the two need different words.
+    scanning: Option<welcome::Scan>,
 
     /// Which overlay is open. One `Option`, so §9's "one at a time, never
     /// stacked" cannot be expressed otherwise.
@@ -183,6 +193,7 @@ impl App {
 
     fn with_session(session: Option<Session>, status: String) -> Self {
         Self {
+            problem: session.is_none().then(|| status.clone()),
             session,
             theme: Theme::dark(),
             keymap: Keymap::standard(),
@@ -215,6 +226,7 @@ impl App {
             scroll_offset: 0.0,
             viewport_height: 650.0,
             status,
+            scanning: None,
             overlay: None,
             dragging_drawer: false,
             queue: None,
@@ -235,10 +247,20 @@ impl App {
             return;
         };
         match session.start_watching() {
-            Ok(()) => {}
-            Err(scoria_core::error::CoreError::NoLibraryRoot) => {
-                self.status = "no library root set -- run `scoria scan <path>`".to_owned();
+            // Watching begins with a catch-up scan (§5.2), so a library is
+            // being read from this moment -- said now rather than when the
+            // first progress arrives, or an empty library would claim to have
+            // found nothing before it had looked.
+            Ok(()) => {
+                self.scanning = Some(welcome::Scan {
+                    seen: 0,
+                    total: None,
+                })
             }
+            // The ordinary first-run state, not a failure. The explorer asks
+            // for a folder; saying anything here would be a second, quieter
+            // copy of that.
+            Err(scoria_core::error::CoreError::NoLibraryRoot) => {}
             Err(e) => self.status = format!("cannot watch the library: {e}"),
         }
     }
@@ -355,6 +377,7 @@ impl App {
             Message::Queue(event) => return self.on_queue(event),
             Message::Columns(event) => self.on_columns(event),
             Message::Settings(event) => return self.on_settings(event),
+            Message::Welcome(event) => return self.on_welcome(event),
             Message::RootChosen(root) => self.set_root(root),
             Message::CloseOverlay => self.set_overlay(None),
             Message::ArtistPane(event) => self.on_artist_pane(event),
@@ -410,10 +433,18 @@ impl App {
                     library_changed = Some(delta);
                 }
                 CoreEvent::ScanProgress { seen, total } => {
+                    self.scanning = Some(welcome::Scan { seen, total });
                     self.status = match total {
                         Some(total) => format!("scanning {seen}/{total}"),
                         None => format!("scanning {seen}"),
                     };
+                }
+                // The scan stopped, whether or not it found anything. Without
+                // this the header would still read "scanning 338/338" an hour
+                // later, and the first-run panel would still be waiting.
+                CoreEvent::ScanFinished => {
+                    self.scanning = None;
+                    self.status = String::new();
                 }
                 CoreEvent::Error(e) => self.status = format!("{e}"),
                 CoreEvent::QueryResult(..) => {}
@@ -516,25 +547,7 @@ impl App {
     fn on_settings(&mut self, event: overlays::settings::Event) -> Task<Message> {
         use overlays::settings::Event as E;
         match event {
-            E::ChooseRoot => {
-                // The picker is a separate process talking to the desktop
-                // portal, so it is awaited off the UI thread rather than
-                // blocking the window for as long as someone browses.
-                let start = self.session.as_ref().and_then(|s| s.config().root.clone());
-                return Task::perform(
-                    async move {
-                        let mut dialog = rfd::AsyncFileDialog::new().set_title("Music library");
-                        if let Some(start) = start {
-                            dialog = dialog.set_directory(start);
-                        }
-                        dialog
-                            .pick_folder()
-                            .await
-                            .map(|handle| handle.path().to_path_buf())
-                    },
-                    Message::RootChosen,
-                );
-            }
+            E::ChooseRoot => return self.choose_root(),
             E::SetPlayBehaviour(behaviour) => {
                 if let Some(session) = &mut self.session
                     && let Err(e) = session.set_play_behaviour(behaviour)
@@ -550,13 +563,46 @@ impl App {
                 self.settings.theme = self.theme.name.clone();
                 self.persist();
             }
-            E::Rescan => match self.session.as_ref().map(Session::request_rescan) {
-                Some(Ok(())) => self.status = "rescanning…".to_owned(),
-                Some(Err(e)) => self.status = format!("{e}"),
-                None => {}
-            },
+            E::Rescan => self.rescan(),
         }
         Task::none()
+    }
+
+    /// The first-run panel (§5.1).
+    ///
+    /// Both of its actions exist in the settings drawer too, and both come
+    /// through the same methods -- there is one way to choose a folder and one
+    /// way to ask for a scan, whichever screen asked.
+    fn on_welcome(&mut self, event: welcome::Event) -> Task<Message> {
+        match event {
+            welcome::Event::ChooseRoot => return self.choose_root(),
+            welcome::Event::Rescan => self.rescan(),
+        }
+        Task::none()
+    }
+
+    /// Opens the folder chooser, starting somewhere useful.
+    fn choose_root(&self) -> Task<Message> {
+        let current = self.session.as_ref().and_then(|s| s.config().root.clone());
+        Task::perform(
+            crate::picker::choose_folder(crate::picker::suggested_start(current)),
+            Message::RootChosen,
+        )
+    }
+
+    /// Asks the scan thread to look again.
+    fn rescan(&mut self) {
+        match self.session.as_ref().map(Session::request_rescan) {
+            Some(Ok(())) => {
+                self.scanning = Some(welcome::Scan {
+                    seen: 0,
+                    total: None,
+                });
+                self.status = "rescanning…".to_owned();
+            }
+            Some(Err(e)) => self.status = format!("{e}"),
+            None => {}
+        }
     }
 
     /// Points the library somewhere else and starts watching it.
@@ -568,8 +614,17 @@ impl App {
 
         match session.set_root(root) {
             // Watching restarts against the new root, and the catch-up scan it
-            // performs does the indexing on the scan thread.
-            Ok(()) => self.status = "scanning the new library…".to_owned(),
+            // performs does the indexing on the scan thread. Marked as scanning
+            // from here rather than from the first progress event, so the
+            // moment between choosing a folder and reading it does not look
+            // like an empty one.
+            Ok(()) => {
+                self.scanning = Some(welcome::Scan {
+                    seen: 0,
+                    total: None,
+                });
+                self.status = "scanning the new library…".to_owned();
+            }
             Err(e) => self.status = format!("{e}"),
         }
     }
@@ -1259,6 +1314,18 @@ impl App {
     }
 
     pub fn view(&self) -> Element<'_, Message, Theme> {
+        // Why there is nothing to list, when there is nothing to list (§5.1).
+        // It takes the table's place rather than covering it, so the window
+        // keeps its shape and the header stays usable.
+        let welcome = welcome::state(
+            self.problem.as_deref(),
+            self.session
+                .as_ref()
+                .and_then(|s| s.config().root.as_deref()),
+            self.rows.len(),
+            self.scanning,
+        );
+
         let table_view = table::TableView {
             lines: &self.lines,
             rows: self.tracks(),
@@ -1349,32 +1416,35 @@ impl App {
         let search = container(header.spacing(6)).padding([6, 10]).width(Fill);
 
         // Built only when a placement will use it: `Off` shows no panes, and
-        // constructing them would be work thrown away every frame.
-        let browser = (self.placement != BrowserPlacement::Off).then(|| Browser {
-            artists: panes::view(
-                panes::PaneView {
-                    heading: "ALBUM ARTIST",
-                    rows: self.artists.clone(),
-                    total: self.artist_total,
-                    scroll_offset: self.artist_scroll,
-                    theme: &self.theme,
-                    id: ARTIST_PANE_ID,
-                },
-                Message::ArtistPane,
-            ),
-            albums: panes::view(
-                panes::PaneView {
-                    heading: "ALBUM",
-                    rows: self.albums.iter().map(|(_, row)| row.clone()).collect(),
-                    total: self.album_total,
-                    scroll_offset: self.album_scroll,
-                    theme: &self.theme,
-                    id: ALBUM_PANE_ID,
-                },
-                Message::AlbumPane,
-            ),
-            artwork: self.artwork_view(),
-        });
+        // constructing them would be work thrown away every frame. Suppressed
+        // entirely while the welcome panel is up -- two empty filter panes
+        // beside "choose a folder" are furniture with nothing in them.
+        let browser =
+            (self.placement != BrowserPlacement::Off && welcome.is_none()).then(|| Browser {
+                artists: panes::view(
+                    panes::PaneView {
+                        heading: "ALBUM ARTIST",
+                        rows: self.artists.clone(),
+                        total: self.artist_total,
+                        scroll_offset: self.artist_scroll,
+                        theme: &self.theme,
+                        id: ARTIST_PANE_ID,
+                    },
+                    Message::ArtistPane,
+                ),
+                albums: panes::view(
+                    panes::PaneView {
+                        heading: "ALBUM",
+                        rows: self.albums.iter().map(|(_, row)| row.clone()).collect(),
+                        total: self.album_total,
+                        scroll_offset: self.album_scroll,
+                        theme: &self.theme,
+                        id: ALBUM_PANE_ID,
+                    },
+                    Message::AlbumPane,
+                ),
+                artwork: self.artwork_view(),
+            });
         // Handed to the layout rather than wrapped around the finished view, so
         // it covers the explorer and leaves the transport reachable.
         // Drawn while retracting too, which is what makes closing an animation
@@ -1394,9 +1464,14 @@ impl App {
             })
         });
 
+        let body = match &welcome {
+            Some(state) => welcome::view(state, &self.theme, Message::Welcome),
+            None => table::view(table_view, Message::Table),
+        };
+
         layouts::arrange(
             self.placement,
-            table::view(table_view, Message::Table),
+            body,
             transport::view(&transport_view, Message::Transport),
             search.into(),
             browser,

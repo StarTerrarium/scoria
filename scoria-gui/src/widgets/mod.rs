@@ -7,6 +7,7 @@ pub mod columns;
 pub mod panes;
 pub mod table;
 pub mod transport;
+pub mod welcome;
 
 use std::time::Duration;
 
