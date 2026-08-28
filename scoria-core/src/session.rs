@@ -49,6 +49,14 @@ pub struct Session {
     playback: Option<PlaybackHandle>,
     /// Watches the root and rescans in the background. See [`Session::start_watching`].
     watcher: Option<WatchHandle>,
+    /// Whether anyone has asked for watching, which is not the same as whether
+    /// it is running.
+    ///
+    /// A frontend that asks before a root is configured is refused, and on
+    /// first run that is every frontend. Without remembering the request,
+    /// choosing a folder later would save it and start nothing -- which is
+    /// exactly what happened.
+    watch_requested: bool,
     /// The desktop's media controls, if this desktop has any.
     media: Option<MediaBridge>,
     /// What the media controls were last told about, kept because they need it
@@ -108,6 +116,7 @@ impl Session {
             inbox,
             playback: None,
             watcher: None,
+            watch_requested: false,
             media: None,
             playing: None,
             playback_state: PlaybackState::Stopped,
@@ -297,6 +306,9 @@ impl Session {
     /// [`CoreError::Database`] if the watcher or the second database handle
     /// cannot be opened.
     pub fn start_watching(&mut self) -> Result<(), CoreError> {
+        // Recorded before the root is looked up, so that a refusal for want of
+        // one is still a standing request. [`Session::set_root`] honours it.
+        self.watch_requested = true;
         if self.watcher.is_some() {
             return Ok(());
         }
@@ -639,10 +651,14 @@ impl Session {
         self.config.root = Some(root);
         crate::config::save(&self.paths.config_file(), &self.config)?;
 
-        if self.watcher.is_some() {
-            // Dropping the handle stops the old thread and joins it, so the two
-            // never watch different roots at once.
-            self.watcher = None;
+        // Dropping the handle stops the old thread and joins it, so the two
+        // never watch different roots at once.
+        self.watcher = None;
+        if self.watch_requested {
+            // Including the case where watching was asked for and refused
+            // because there was no root yet. This call is what makes the root
+            // exist, so the request can finally be honoured -- and the
+            // catch-up scan it starts is what indexes the new library.
             self.start_watching()?;
         }
         Ok(())

@@ -319,3 +319,47 @@ fn a_scan_that_found_something_finishes_after_saying_so() {
         "the scan found a track but reported no change: {seen:?}"
     );
 }
+
+#[test]
+fn choosing_a_root_starts_the_watching_that_was_asked_for_too_early() {
+    // First run, exactly as a frontend does it: ask to watch before there is
+    // anything to watch, be refused, and then choose a folder. The request
+    // stands, so setting the root is what finally honours it -- and the
+    // catch-up scan is what indexes the library.
+    //
+    // Without this, choosing a folder saved the setting and started nothing:
+    // the window sat on "Reading your library. 0 files so far." forever.
+    let scratch = Scratch::new("firstrun");
+    scratch.write_track("a/01.flac", "First");
+
+    let mut session = Session::open(Paths::rooted_at(&scratch.dir)).unwrap();
+    assert!(matches!(
+        session.start_watching(),
+        Err(scoria_core::error::CoreError::NoLibraryRoot)
+    ));
+
+    session.set_root(scratch.root()).unwrap();
+    wait_for_change(&mut session, "the scan of the newly chosen library");
+
+    assert_eq!(session.index().len(), 1);
+    // And it keeps watching the new root, rather than scanning it once.
+    scratch.write_track("a/02.flac", "Second");
+    wait_for_change(&mut session, "a file added after the root was chosen");
+    assert_eq!(session.index().len(), 2);
+}
+
+#[test]
+fn a_session_that_never_asked_to_watch_does_not_start_on_its_own() {
+    // The command line sets a root and scans synchronously. Spawning a watch
+    // thread it never asked for would scan the library twice.
+    let scratch = Scratch::new("unwatched");
+    scratch.write_track("a/01.flac", "First");
+
+    let mut session = Session::open(Paths::rooted_at(&scratch.dir)).unwrap();
+    session.set_root(scratch.root()).unwrap();
+
+    assert!(
+        session.request_rescan().is_err(),
+        "watching started without being asked for"
+    );
+}
