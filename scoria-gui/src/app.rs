@@ -33,6 +33,8 @@ use std::time::Duration;
 const POLL: Duration = Duration::from_millis(60);
 
 const SEARCH_ID: &str = "search";
+/// The table's scrollable, so the cursor can drag the view with it.
+const TABLE_ID: &str = "tracks";
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -43,8 +45,6 @@ pub enum Message {
     SearchChanged(String),
     /// A key press, already resolved through the keymap.
     Action(Action),
-    Scrolled(f32),
-    Resized(f32),
 }
 
 /// Everything the window shows.
@@ -119,7 +119,7 @@ impl App {
             repeat: RepeatMode::Off,
             volume: 1.0,
             scroll_offset: 0.0,
-            viewport_height: 600.0,
+            viewport_height: 650.0,
             status,
         }
     }
@@ -157,7 +157,7 @@ impl App {
         match message {
             Message::Tick => self.drain_core_events(),
             Message::Table(event) => self.on_table(event),
-            Message::Transport(event) => self.on_transport(event),
+            Message::Transport(event) => return self.on_transport(event),
             Message::SearchChanged(query) => {
                 self.search = query;
                 self.selection.search = if self.search.is_empty() {
@@ -169,8 +169,6 @@ impl App {
                 self.refresh();
             }
             Message::Action(action) => return self.on_action(action),
-            Message::Scrolled(offset) => self.scroll_offset = offset,
-            Message::Resized(height) => self.viewport_height = height,
         }
         Task::none()
     }
@@ -214,10 +212,14 @@ impl App {
             // "Show album art" the one escape hatch from artwork following
             // playback, so it belongs there rather than here.
             table::Event::Context(index) => self.cursor = Some(index),
+            table::Event::Scrolled { offset, viewport } => {
+                self.scroll_offset = offset;
+                self.viewport_height = viewport;
+            }
         }
     }
 
-    fn on_transport(&mut self, event: transport::Event) {
+    fn on_transport(&mut self, event: transport::Event) -> Task<Message> {
         let command = match event {
             transport::Event::PlayPause => {
                 if self.state == PlaybackState::Playing {
@@ -234,28 +236,32 @@ impl App {
                 self.volume = v;
                 Command::SetVolume(v)
             }
-            transport::Event::JumpToPlaying => {
-                self.jump_to_playing();
-                return;
-            }
+            transport::Event::JumpToPlaying => return self.jump_to_playing(),
             // The artwork overlay arrives at M9.
-            transport::Event::ShowArtwork => return,
+            transport::Event::ShowArtwork => return Task::none(),
         };
         self.send(command);
+        Task::none()
     }
 
     fn on_action(&mut self, action: Action) -> Task<Message> {
         match action {
-            Action::MoveDown => self.move_cursor(1),
-            Action::MoveUp => self.move_cursor(-1),
-            Action::PageDown => self.move_cursor(self.page()),
-            Action::PageUp => self.move_cursor(-self.page()),
-            Action::MoveToStart => self.cursor = (!self.rows.is_empty()).then_some(0),
-            Action::MoveToEnd => self.cursor = self.rows.len().checked_sub(1),
+            Action::MoveDown => return self.move_cursor(1),
+            Action::MoveUp => return self.move_cursor(-1),
+            Action::PageDown => return self.move_cursor(self.page()),
+            Action::PageUp => return self.move_cursor(-self.page()),
+            Action::MoveToStart => {
+                self.cursor = (!self.rows.is_empty()).then_some(0);
+                return self.scroll_to_cursor();
+            }
+            Action::MoveToEnd => {
+                self.cursor = self.rows.len().checked_sub(1);
+                return self.scroll_to_cursor();
+            }
             // Multiple selection arrives with the selection model at M10; the
             // actions exist now so the keymap is complete.
-            Action::ExtendUp => self.move_cursor(-1),
-            Action::ExtendDown => self.move_cursor(1),
+            Action::ExtendUp => return self.move_cursor(-1),
+            Action::ExtendDown => return self.move_cursor(1),
             Action::PlaySelection => self.play_from_cursor(),
             Action::PlayPause => {
                 let command = if self.state == PlaybackState::Playing {
@@ -269,7 +275,7 @@ impl App {
             Action::Previous => self.send(Command::Previous),
             Action::ToggleShuffle => self.send(Command::SetShuffle(!self.shuffled)),
             Action::CycleRepeat => self.send(Command::SetRepeat(next_repeat(self.repeat))),
-            Action::JumpToPlaying => self.jump_to_playing(),
+            Action::JumpToPlaying => return self.jump_to_playing(),
             Action::CycleLayout => {
                 self.placement = self.placement.cycle();
                 self.status = self.placement.label().to_owned();
@@ -287,10 +293,10 @@ impl App {
     /// track. Deliberately not scoped to its album or artist -- the default
     /// sort puts it inside its album anyway, with the artist's other albums
     /// immediately above and below.
-    fn jump_to_playing(&mut self) {
+    fn jump_to_playing(&mut self) -> Task<Message> {
         let Some(playing) = self.playing else {
             self.status = "nothing is playing".to_owned();
-            return;
+            return Task::none();
         };
 
         self.search.clear();
@@ -299,8 +305,9 @@ impl App {
 
         if let Some(index) = self.rows.iter().position(|id| *id == playing) {
             self.cursor = Some(index);
-            self.scroll_to_cursor();
+            return self.scroll_to_cursor();
         }
+        Task::none()
     }
 
     /// Turns the cursor into a snapshot and plays it.
@@ -330,9 +337,9 @@ impl App {
         }
     }
 
-    fn move_cursor(&mut self, delta: isize) {
+    fn move_cursor(&mut self, delta: isize) -> Task<Message> {
         if self.rows.is_empty() {
-            return;
+            return Task::none();
         }
         let last = self.rows.len().saturating_sub(1);
         let next = match self.cursor {
@@ -346,7 +353,7 @@ impl App {
             Some(current) => current.saturating_add_signed(delta).min(last),
         };
         self.cursor = Some(next);
-        self.scroll_to_cursor();
+        self.scroll_to_cursor()
     }
 
     fn page(&self) -> isize {
@@ -354,20 +361,38 @@ impl App {
     }
 
     /// Keeps the cursor inside the viewport by nudging the scroll offset.
-    fn scroll_to_cursor(&mut self) {
-        let Some(cursor) = self.cursor else { return };
+    ///
+    /// Returns a task that moves the real scrollable. Changing our own offset
+    /// alone would only change which rows get built -- the widget would stay
+    /// where it was, and the two would disagree.
+    fn scroll_to_cursor(&mut self) -> Task<Message> {
+        let Some(cursor) = self.cursor else {
+            return Task::none();
+        };
         let Some(line) = self.line_of_row(cursor) else {
-            return;
+            return Task::none();
         };
 
         let top = line as f32 * table::ROW_HEIGHT;
         let bottom = top + table::ROW_HEIGHT;
+        let previous = self.scroll_offset;
 
         if top < self.scroll_offset {
             self.scroll_offset = top;
         } else if bottom > self.scroll_offset + self.viewport_height {
             self.scroll_offset = bottom - self.viewport_height;
         }
+
+        if (self.scroll_offset - previous).abs() < f32::EPSILON {
+            return Task::none();
+        }
+        iced::widget::operation::scroll_to(
+            iced::widget::Id::new(TABLE_ID),
+            iced::widget::scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: self.scroll_offset,
+            },
+        )
     }
 
     /// Which display line a row sits on, accounting for group headers.
@@ -388,16 +413,14 @@ impl App {
     }
 
     pub fn view(&self) -> Element<'_, Message, Theme> {
-        let tracks = self.tracks();
-
         let table_view = table::TableView {
             lines: &self.lines,
-            rows: &tracks,
+            rows: self.tracks(),
             selected: self.cursor,
             playing: self.playing,
             scroll_offset: self.scroll_offset,
-            viewport_height: self.viewport_height,
             theme: &self.theme,
+            id: TABLE_ID,
         };
 
         let now_playing = self.playing.and_then(|id| self.track(id));
@@ -432,7 +455,7 @@ impl App {
 
         layouts::arrange(
             self.placement,
-            table::view(&table_view, Message::Table),
+            table::view(table_view, Message::Table),
             transport::view(&transport_view, Message::Transport),
             search.into(),
             None,

@@ -18,7 +18,7 @@
 //! division instead of a search.
 
 use crate::theme::{RowState, Theme};
-use iced::widget::{Space, column, container, mouse_area, row, scrollable, text};
+use iced::widget::{Space, column, container, mouse_area, responsive, row, scrollable, text};
 use iced::{Alignment, Element, Fill, Length};
 use scoria_core::id::TrackId;
 use scoria_core::model::Track;
@@ -33,7 +33,13 @@ const OVERSCAN: usize = 6;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Line {
     /// A group header (§7.3), inserted where the primary sort key changes.
-    Header(String),
+    ///
+    /// Carries the row its group starts at, not just a label. Without it the
+    /// click site has only a *line* index, and line and row indices diverge by
+    /// one per header above -- which is exactly the bug this replaced: clicking
+    /// a band header played a track further down the list, one further for
+    /// every header preceding it.
+    Header { label: String, first_row: usize },
     /// A track, by its index into the query result.
     Track(usize),
 }
@@ -50,7 +56,13 @@ pub fn build_lines(track_count: usize, groups: &[Group]) -> Vec<Line> {
 
     let mut lines = Vec::with_capacity(track_count + groups.len());
     for group in groups {
-        lines.push(Line::Header(group.label.clone()));
+        if group.start >= track_count {
+            continue;
+        }
+        lines.push(Line::Header {
+            label: group.label.clone(),
+            first_row: group.start,
+        });
         for index in group.start..group.end().min(track_count) {
             lines.push(Line::Track(index));
         }
@@ -82,17 +94,21 @@ pub fn visible_range(lines: usize, scroll_offset: f32, viewport_height: f32) -> 
 /// What the table needs in order to draw itself.
 pub struct TableView<'a> {
     pub lines: &'a [Line],
-    pub rows: &'a [&'a Track],
+    /// Owned, so the whole view can move into the `responsive` closure -- which
+    /// is what lets the table measure its own viewport.
+    pub rows: Vec<&'a Track>,
     pub selected: Option<usize>,
     pub playing: Option<TrackId>,
     pub scroll_offset: f32,
-    pub viewport_height: f32,
     pub theme: &'a Theme,
+    /// Identifies the scrollable, so moving the cursor by keyboard can move the
+    /// view with it.
+    pub id: &'static str,
 }
 
 /// Messages the table produces. Translated by the application into commands;
 /// the table itself knows nothing about playback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Event {
     /// A row was clicked: select it.
     Select(usize),
@@ -103,53 +119,70 @@ pub enum Event {
     /// Right-click, which §9.1 makes the one escape hatch from artwork
     /// following playback.
     Context(usize),
+    /// The scroll position moved, and the viewport is this tall.
+    ///
+    /// Virtualisation cannot work without this. The window of built rows comes
+    /// from where the scroll is, so a table that is never told about scrolling
+    /// renders one screenful and blank space for the rest of the library.
+    Scrolled { offset: f32, viewport: f32 },
 }
 
 /// Builds the table.
 #[must_use]
 pub fn view<'a, Message: Clone + 'a>(
-    table: &TableView<'_>,
-    on_event: impl Fn(Event) -> Message + 'a,
+    table: TableView<'a>,
+    on_event: impl Fn(Event) -> Message + Copy + 'a,
 ) -> Element<'a, Message, Theme> {
-    let (start, end) = visible_range(
-        table.lines.len(),
-        table.scroll_offset,
-        table.viewport_height,
-    );
+    let header_row = header(table.theme);
 
-    let mut body = column![].width(Fill);
+    // `responsive` hands the closure the space actually available, which is the
+    // only honest source for the viewport height. Deriving it from the window
+    // size would mean tracking the height of every piece of chrome around the
+    // table and getting it wrong whenever one changed.
+    let body = responsive(move |size| {
+        let (start, end) = visible_range(table.lines.len(), table.scroll_offset, size.height);
+        let mut rows = column![].width(Fill);
 
-    // The scroll extent above the first built row, so the scrollbar reflects
-    // the whole library rather than the handful of rows that exist right now.
-    if start > 0 {
-        body = body.push(Space::new().height(Length::Fixed(start as f32 * ROW_HEIGHT)));
-    }
+        // The scroll extent above the first built row, so the scrollbar
+        // reflects the whole library rather than the rows that exist now.
+        if start > 0 {
+            rows = rows.push(Space::new().height(Length::Fixed(start as f32 * ROW_HEIGHT)));
+        }
 
-    for index in start..end {
-        let Some(line) = table.lines.get(index) else {
-            break;
-        };
-        body = body.push(match line {
-            Line::Header(label) => group_header(label, index, table.theme, &on_event),
-            Line::Track(row_index) => match table.rows.get(*row_index) {
-                Some(track) => track_row(track, *row_index, table, &on_event),
-                None => Space::new().height(Length::Fixed(ROW_HEIGHT)).into(),
-            },
-        });
-    }
+        for index in start..end {
+            let Some(line) = table.lines.get(index) else {
+                break;
+            };
+            rows = rows.push(match line {
+                Line::Header { label, first_row } => {
+                    group_header(label, *first_row, table.theme, &on_event)
+                }
+                Line::Track(row_index) => match table.rows.get(*row_index) {
+                    Some(track) => track_row(track, *row_index, &table, &on_event),
+                    None => Space::new().height(Length::Fixed(ROW_HEIGHT)).into(),
+                },
+            });
+        }
 
-    if end < table.lines.len() {
-        let remaining = table.lines.len() - end;
-        body = body.push(Space::new().height(Length::Fixed(remaining as f32 * ROW_HEIGHT)));
-    }
+        if end < table.lines.len() {
+            let remaining = table.lines.len() - end;
+            rows = rows.push(Space::new().height(Length::Fixed(remaining as f32 * ROW_HEIGHT)));
+        }
 
-    column![
-        header(table.theme),
-        scrollable(body).height(Fill).width(Fill)
-    ]
-    .width(Fill)
-    .height(Fill)
-    .into()
+        scrollable(rows)
+            .id(iced::widget::Id::new(table.id))
+            .height(Fill)
+            .width(Fill)
+            .on_scroll(move |viewport| {
+                on_event(Event::Scrolled {
+                    offset: viewport.absolute_offset().y,
+                    viewport: viewport.bounds().height,
+                })
+            })
+            .into()
+    });
+
+    column![header_row, body].width(Fill).height(Fill).into()
 }
 
 /// The column header. §7.3 gives the default column set.
@@ -179,7 +212,7 @@ fn header<'a, Message: 'a>(theme: &Theme) -> Element<'a, Message, Theme> {
 
 fn group_header<'a, Message: Clone + 'a>(
     label: &str,
-    line: usize,
+    first_row: usize,
     theme: &Theme,
     on_event: &impl Fn(Event) -> Message,
 ) -> Element<'a, Message, Theme> {
@@ -191,9 +224,10 @@ fn group_header<'a, Message: Clone + 'a>(
         .width(Fill)
         .style(move |_theme: &Theme| style);
 
-    // §7.3: group headers are click targets for playing the whole album.
+    // §7.3: group headers are click targets for playing the group they head.
+    // `first_row`, not the line index -- see the note on `Line::Header`.
     mouse_area(content)
-        .on_press(on_event(Event::Activate(line)))
+        .on_press(on_event(Event::Activate(first_row)))
         .into()
 }
 
@@ -303,11 +337,69 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                Line::Header("Ghost".to_owned()),
+                Line::Header {
+                    label: "Ghost".to_owned(),
+                    first_row: 0
+                },
                 Line::Track(0),
                 Line::Track(1),
-                Line::Header("Alcest".to_owned()),
+                Line::Header {
+                    label: "Alcest".to_owned(),
+                    first_row: 2
+                },
                 Line::Track(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_header_names_the_row_its_group_starts_at() {
+        // The bug this replaced: the header emitted its *line* index, and line
+        // and row indices diverge by one for every header above. Clicking the
+        // first band played its first track by luck; the second band played its
+        // second track, the third band its third, and so on.
+        let lines = build_lines(
+            25,
+            &[group("a", 0, 13), group("b", 13, 10), group("c", 23, 2)],
+        );
+
+        let headers: Vec<(&str, usize)> = lines
+            .iter()
+            .filter_map(|l| match l {
+                Line::Header { label, first_row } => Some((label.as_str(), *first_row)),
+                Line::Track(_) => None,
+            })
+            .collect();
+
+        assert_eq!(headers, vec![("a", 0), ("b", 13), ("c", 23)]);
+
+        // And the row a header names must be the first track drawn under it,
+        // which is the property a click depends on.
+        for (index, line) in lines.iter().enumerate() {
+            if let Line::Header { first_row, .. } = line {
+                assert_eq!(
+                    lines.get(index + 1),
+                    Some(&Line::Track(*first_row)),
+                    "the header does not sit directly above the row it names"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_group_reaching_past_the_rows_is_dropped_rather_than_left_empty() {
+        // A stale group against a shorter result would otherwise leave a header
+        // naming a row that is not there.
+        let lines = build_lines(2, &[group("a", 0, 2), group("b", 5, 3)]);
+        assert_eq!(
+            lines,
+            vec![
+                Line::Header {
+                    label: "a".to_owned(),
+                    first_row: 0
+                },
+                Line::Track(0),
+                Line::Track(1),
             ]
         );
     }
@@ -320,7 +412,7 @@ mod tests {
             .iter()
             .filter_map(|l| match l {
                 Line::Track(i) => Some(*i),
-                Line::Header(_) => None,
+                Line::Header { .. } => None,
             })
             .collect();
         tracks.sort_unstable();
