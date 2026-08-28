@@ -17,6 +17,7 @@ pub mod model;
 pub mod path;
 pub mod playback;
 pub mod query;
+pub mod session;
 
 #[cfg(test)]
 mod test_support;
@@ -37,3 +38,4 @@ pub use playback::{
 };
 pub use query::sort::{Direction, Group, SortChain, SortField, SortKey, SortPreset};
 pub use query::{AlbumPane, FilterPane, LibraryIndex, QueryEngine, QueryOutcome, Selection};
+pub use session::Session;

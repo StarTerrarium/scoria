@@ -108,8 +108,9 @@ impl Drop for PlaybackHandle {
 
 /// Starts the audio thread.
 ///
-/// Returns a handle for sending commands and a receiver for the events it
-/// emits.
+/// Events go to `events` rather than to a channel of the engine's own, so a
+/// session can merge playback events with query and scan events into the single
+/// stream a frontend consumes. §3.2 describes one event stream, not two.
 ///
 /// # Errors
 ///
@@ -117,9 +118,10 @@ impl Drop for PlaybackHandle {
 pub fn spawn(
     backend: Box<dyn AudioBackend>,
     resolver: Arc<dyn TrackResolver>,
-) -> Result<(PlaybackHandle, Receiver<Event>), CoreError> {
+    events: Sender<Event>,
+) -> Result<PlaybackHandle, CoreError> {
     let (command_tx, command_rx) = channel();
-    let (event_tx, event_rx) = channel();
+    let event_tx = events;
 
     let thread = std::thread::Builder::new()
         .name("scoria-audio".to_owned())
@@ -142,13 +144,10 @@ pub fn spawn(
         })
         .map_err(|e| CoreError::Database(format!("cannot start the audio thread: {e}")))?;
 
-    Ok((
-        PlaybackHandle {
-            commands: command_tx,
-            thread: Some(thread),
-        },
-        event_rx,
-    ))
+    Ok(PlaybackHandle {
+        commands: command_tx,
+        thread: Some(thread),
+    })
 }
 
 struct Engine {

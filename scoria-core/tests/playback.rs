@@ -92,7 +92,8 @@ impl Rig {
     fn new(resolver: Arc<dyn TrackResolver>) -> Self {
         let backend = MockBackend::new();
         let control = backend.control();
-        let (handle, events) = spawn(Box::new(backend), resolver).unwrap();
+        let (event_tx, events) = std::sync::mpsc::channel();
+        let handle = spawn(Box::new(backend), resolver, event_tx).unwrap();
         Self {
             handle,
             events,

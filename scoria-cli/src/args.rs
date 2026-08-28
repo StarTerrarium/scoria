@@ -1,0 +1,251 @@
+//! Argument parsing.
+//!
+//! Hand-rolled rather than `clap`. The surface is a handful of subcommands with
+//! at most one flag each, and `clap` would be the largest dependency in the
+//! workspace for a tool that exists to debug the seam. If this grows options
+//! worth a parser, that is the moment to add one -- not before.
+
+use std::path::PathBuf;
+
+#[derive(Debug, PartialEq)]
+pub enum Cmd {
+    Help,
+    Version,
+    Info,
+    Config,
+    Scan {
+        root: Option<PathBuf>,
+    },
+    Watch,
+    Tracks {
+        limit: usize,
+    },
+    Artists,
+    Albums {
+        artist: Option<String>,
+    },
+    Search {
+        query: String,
+    },
+    Play {
+        query: Option<String>,
+        shuffle: bool,
+    },
+}
+
+#[derive(Debug)]
+pub struct Parsed {
+    pub command: Cmd,
+    /// Overrides the configured library root for this run only.
+    pub root: Option<PathBuf>,
+}
+
+const DEFAULT_LIMIT: usize = 50;
+
+/// Parses argv, or returns a message explaining what was wrong with it.
+///
+/// # Errors
+///
+/// A human-readable complaint, already phrased for printing.
+pub fn parse(args: &[String]) -> Result<Parsed, String> {
+    let mut root = None;
+    let mut rest: Vec<&str> = Vec::new();
+
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--root" => {
+                let value = it.next().ok_or("--root needs a path")?;
+                root = Some(PathBuf::from(value));
+            }
+            other => rest.push(other),
+        }
+    }
+
+    let Some((name, tail)) = rest.split_first() else {
+        return Ok(Parsed {
+            command: Cmd::Help,
+            root,
+        });
+    };
+
+    let command = match *name {
+        "help" | "-h" | "--help" => Cmd::Help,
+        "version" | "-V" | "--version" => Cmd::Version,
+        "info" => Cmd::Info,
+        "config" => Cmd::Config,
+        "watch" => Cmd::Watch,
+        "scan" => Cmd::Scan {
+            root: tail.first().map(PathBuf::from),
+        },
+        "tracks" => {
+            let limit = match tail.first() {
+                None => DEFAULT_LIMIT,
+                Some(v) => v.parse().map_err(|_| format!("not a number: {v}"))?,
+            };
+            Cmd::Tracks { limit }
+        }
+        "artists" => Cmd::Artists,
+        "albums" => Cmd::Albums { artist: join(tail) },
+        "search" => {
+            let query = join(tail).ok_or("search needs something to search for")?;
+            Cmd::Search { query }
+        }
+        "play" => {
+            let shuffle = tail.contains(&"--shuffle");
+            let terms: Vec<&str> = tail.iter().copied().filter(|a| *a != "--shuffle").collect();
+            Cmd::Play {
+                query: join(&terms),
+                shuffle,
+            }
+        }
+        other => return Err(format!("unknown command: {other}\n\nTry `scoria help`.")),
+    };
+
+    Ok(Parsed { command, root })
+}
+
+/// Joins the remaining words, so `scoria play electric callboy` works without
+/// quoting.
+fn join(parts: &[&str]) -> Option<String> {
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join(" "))
+}
+
+pub const HELP: &str = "\
+scoria -- a library-centric music player for Linux
+
+USAGE
+    scoria [--root PATH] <command>
+
+LIBRARY
+    scan [PATH]        Index a library. With PATH, makes it the library root.
+    watch              Watch the root and rescan when it changes.
+    info               Library and playback status.
+    config             Settings, and where they live.
+
+BROWSING
+    tracks [N]         List tracks in the default sort order. Default 50.
+    artists            Album artists with track counts, as the filter pane shows them.
+    albums [ARTIST]    Albums, optionally for one artist.
+    search QUERY       Full-text search across title, artist and album.
+
+PLAYBACK
+    play [QUERY]       Play matching tracks, or the whole library.
+        --shuffle      Shuffle the snapshot.
+
+    While playing, type a key and press Enter:
+        p  pause or resume       n  next            b  previous
+        s  toggle shuffle        r  cycle repeat    q  quit
+        +  louder                -  quieter         ?  what is playing
+
+OPTIONS
+    --root PATH        Use this library root for one run, without saving it.
+
+This is a debugging harness for the core. It drives the same Command/Event
+seam the graphical frontend will, which is what keeps that seam honest.
+";
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn parse_args(args: &[&str]) -> Parsed {
+        parse(&args.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>()).unwrap()
+    }
+
+    #[test]
+    fn no_arguments_shows_help() {
+        assert_eq!(parse_args(&[]).command, Cmd::Help);
+    }
+
+    #[test]
+    fn multi_word_queries_need_no_quoting() {
+        // `scoria play electric callboy` is what someone will actually type.
+        let parsed = parse_args(&["play", "electric", "callboy"]);
+        assert_eq!(
+            parsed.command,
+            Cmd::Play {
+                query: Some("electric callboy".to_owned()),
+                shuffle: false
+            }
+        );
+    }
+
+    #[test]
+    fn the_shuffle_flag_is_not_mistaken_for_a_search_term() {
+        let parsed = parse_args(&["play", "ghost", "--shuffle"]);
+        assert_eq!(
+            parsed.command,
+            Cmd::Play {
+                query: Some("ghost".to_owned()),
+                shuffle: true
+            }
+        );
+    }
+
+    #[test]
+    fn root_can_appear_anywhere() {
+        for args in [
+            vec!["--root", "/music", "artists"],
+            vec!["artists", "--root", "/music"],
+        ] {
+            let parsed = parse_args(&args);
+            assert_eq!(parsed.command, Cmd::Artists);
+            assert_eq!(parsed.root.as_deref(), Some(std::path::Path::new("/music")));
+        }
+    }
+
+    #[test]
+    fn a_missing_root_value_is_explained_rather_than_ignored() {
+        let args = vec!["--root".to_owned()];
+        assert!(parse(&args).is_err());
+    }
+
+    #[test]
+    fn an_unknown_command_says_so() {
+        let args = vec!["frobnicate".to_owned()];
+        let complaint = parse(&args).unwrap_err();
+        assert!(complaint.contains("frobnicate"), "{complaint}");
+    }
+
+    #[test]
+    fn track_limits_are_parsed_and_defaulted() {
+        assert_eq!(
+            parse_args(&["tracks"]).command,
+            Cmd::Tracks {
+                limit: DEFAULT_LIMIT
+            }
+        );
+        assert_eq!(
+            parse_args(&["tracks", "5"]).command,
+            Cmd::Tracks { limit: 5 }
+        );
+        assert!(parse(&["tracks".to_owned(), "many".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn scan_takes_an_optional_path() {
+        assert_eq!(parse_args(&["scan"]).command, Cmd::Scan { root: None });
+        assert_eq!(
+            parse_args(&["scan", "/music"]).command,
+            Cmd::Scan {
+                root: Some(PathBuf::from("/music"))
+            }
+        );
+    }
+
+    #[test]
+    fn help_covers_every_command_it_accepts() {
+        // A command that parses but is undocumented is one nobody finds.
+        for name in [
+            "scan", "watch", "info", "config", "tracks", "artists", "albums", "search", "play",
+        ] {
+            assert!(HELP.contains(name), "{name} is missing from the help text");
+        }
+    }
+}

@@ -10,8 +10,9 @@ configuration.
 It is aimed at someone with a well-organised local library who listens to whole
 albums and wants to see a lot of information at once.
 
-> **Status: early development.** Nothing here plays music yet. The design is
-> settled and documented; the implementation has just started.
+> **Status: early development.** The core works -- scanning, querying, gapless
+> playback -- and is driven from a command line. There is no graphical frontend
+> yet.
 
 ## Design
 
@@ -70,6 +71,19 @@ The application is written to have no known way to panic at runtime. `unwrap`,
 workspace-wide rather than discouraged, and `scripts/check-boundaries.sh` flags
 any local `allow` that reopens one outside a test module. Errors are returned and
 surfaced through the event stream instead.
+
+## Trying it
+
+```sh
+cargo build --release
+./target/release/scoria scan ~/Music
+./target/release/scoria artists
+./target/release/scoria play "sleep token"
+```
+
+`scoria help` lists the rest. The command line drives the same `Command`/`Event`
+seam the graphical frontend will, which is what keeps that seam honest -- and it
+exists first, so there is no way for UI code to reach past it.
 
 ## Layout
 
