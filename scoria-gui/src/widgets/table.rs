@@ -115,7 +115,14 @@ pub struct TableView<'a> {
     /// is what lets the table measure its own viewport.
     pub rows: Vec<&'a Track>,
     pub selected: Option<usize>,
+    /// The playing track, by id. What the library view knows.
     pub playing: Option<TrackId>,
+    /// The playing row, by index. What the queue knows.
+    ///
+    /// Both exist because they answer the same question from different sides: a
+    /// library view has no position, and a snapshot can hold one track twice,
+    /// where only one instance is playing.
+    pub playing_row: Option<usize>,
     pub scroll_offset: f32,
     pub theme: &'a Theme,
     /// Identifies the scrollable, so moving the cursor by keyboard can move the
@@ -268,7 +275,7 @@ fn track_row<'a, Message: Clone + 'a>(
 ) -> Element<'a, Message, Theme> {
     let state = RowState {
         selected: table.selected == Some(row_index),
-        playing: table.playing == Some(track.id),
+        playing: table.playing == Some(track.id) || table.playing_row == Some(row_index),
         alternate: row_index % 2 == 1,
         available: track.available,
     };

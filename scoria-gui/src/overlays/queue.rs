@@ -16,7 +16,6 @@ use crate::theme::Theme;
 use crate::widgets::table;
 use iced::widget::{column, container, text};
 use iced::{Element, Fill};
-use scoria_core::id::TrackId;
 use scoria_core::model::Track;
 
 /// What the queue needs in order to draw itself.
@@ -32,7 +31,14 @@ pub struct QueueView<'a> {
     pub rows: Vec<&'a Track>,
     /// Index into the snapshot of the track playing now.
     pub position: Option<usize>,
-    pub playing: Option<TrackId>,
+    /// The row the user has clicked or arrowed onto.
+    ///
+    /// Separate from `position`: §11's roles exist because a track can be
+    /// selected, playing, both, either or neither, and the queue is where all
+    /// four happen. An earlier version made a click do nothing at all, on the
+    /// grounds that selection in a play order *is* the position -- which is
+    /// tidy reasoning and reads as a broken window.
+    pub cursor: Option<usize>,
     pub scroll_offset: f32,
     /// Set when the view's contents no longer match the snapshot.
     pub divergence: Option<String>,
@@ -64,10 +70,11 @@ pub fn view<'a, Message: Clone + 'a>(
     let table_view = table::TableView {
         lines: queue.lines,
         rows: queue.rows,
-        // The current position is shown as the selection, because in the queue
-        // that is what selection means: where you are.
-        selected: queue.position,
-        playing: queue.playing,
+        selected: queue.cursor,
+        // Marked by index rather than by id: a snapshot may hold the same track
+        // twice, and only one of them is the one playing.
+        playing_row: queue.position,
+        playing: None,
         scroll_offset: queue.scroll_offset,
         theme,
         id: queue.id,

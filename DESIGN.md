@@ -479,7 +479,9 @@ Uses the track table pointed at `tracks` -- the same widget, not a second one, w
 
 **No group headers.** The snapshot is a play order, and a header wherever the album changed would suggest the grouping means something. It does not: the order is the order (§6.2).
 
-Selection in the queue *is* the position, so a single click does nothing. Marking a row without moving there would imply the queue has a selection model of its own, and it does not.
+**The queue has its own cursor, separate from the position.** An earlier version made a single click do nothing, reasoning that selection in a play order *is* the position. That is tidy and wrong: a click that produces no response at all reads as a broken window, whatever the model says selection ought to mean. §11's roles already allow for it -- a track can be selected, playing, both, either or neither, and the queue is where all four occur.
+
+Clicking marks a row. Double-clicking, or Enter, moves playback there. While the queue is open the arrow keys move its cursor rather than the library's, because an overlay is modal and moving a selection hidden behind one is both wrong and invisible.
 
 The queue view exists specifically because `tracks` and `origin` can diverge. Without it there is no authoritative answer to "what plays next", and a `Next` button that disagrees with the visible list reads as a bug.
 

@@ -121,6 +121,8 @@ pub struct App {
     queue: Option<scoria_core::PlaybackSource>,
     queue_lines: Vec<table::Line>,
     queue_scroll: f32,
+    /// The row the queue's own cursor is on, independent of what is playing.
+    queue_cursor: Option<usize>,
     /// The file's own tags, read when the properties overlay opens.
     properties: Vec<(String, String)>,
     properties_problem: Option<String>,
@@ -180,6 +182,7 @@ impl App {
             queue: None,
             queue_lines: Vec::new(),
             queue_scroll: 0.0,
+            queue_cursor: None,
             properties: Vec::new(),
             properties_problem: None,
         }
@@ -407,16 +410,48 @@ impl App {
     /// The queue's own table events. §9.2: double-click sets `position`.
     fn on_queue(&mut self, event: table::Event) -> Task<Message> {
         match event {
-            table::Event::Activate(index) => self.send(Command::SetPosition(index)),
+            // A click marks the row and does nothing else, and that is fine: a
+            // click producing no response at all reads as a broken window,
+            // whatever the model says selection ought to mean here.
+            table::Event::Select(index) | table::Event::Context(index) => {
+                self.queue_cursor = Some(index);
+            }
+            table::Event::Activate(index) => {
+                self.queue_cursor = Some(index);
+                self.send(Command::SetPosition(index));
+            }
             table::Event::Scrolled { offset, viewport } => {
                 self.queue_scroll = offset;
                 self.viewport_height = viewport;
             }
-            // Selection in the queue *is* the position, so a single click
-            // marking a row would imply something it cannot do.
-            table::Event::Select(_) | table::Event::Context(_) => {}
         }
         Task::none()
+    }
+
+    /// Moves the queue's cursor, for the arrow keys.
+    fn move_queue_cursor(&mut self, delta: isize) -> Task<Message> {
+        let Some(queue) = &self.queue else {
+            return Task::none();
+        };
+        let Some(last) = queue.len().checked_sub(1) else {
+            return Task::none();
+        };
+
+        let next = match self.queue_cursor {
+            None => queue.position().unwrap_or(0),
+            Some(current) => current.saturating_add_signed(delta).min(last),
+        };
+        self.queue_cursor = Some(next);
+        self.queue_scroll =
+            table::centre_offset(next, self.queue_lines.len(), self.viewport_height);
+
+        iced::widget::operation::scroll_to(
+            iced::widget::Id::new(QUEUE_ID),
+            iced::widget::scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: self.queue_scroll,
+            },
+        )
     }
 
     fn on_artist_pane(&mut self, event: panes::Event) {
@@ -469,10 +504,14 @@ impl App {
         // The queue opens showing where you are, which means scrolled to it.
         // §9.2 asks for the current position marked *and* scrolled into view.
         if self.open_overlay_kind() == Some(Overlay::Queue) {
+            // Opens with the cursor where playback is, which is also the row
+            // it scrolls to. Arriving with nothing selected would make the
+            // first arrow press jump somewhere arbitrary.
             let position = self
                 .queue
                 .as_ref()
                 .and_then(scoria_core::PlaybackSource::position);
+            self.queue_cursor = position;
             if let Some(position) = position {
                 self.queue_scroll =
                     table::centre_offset(position, self.queue_lines.len(), self.viewport_height);
@@ -665,6 +704,25 @@ impl App {
     }
 
     fn on_action(&mut self, action: Action) -> Task<Message> {
+        // §9: an overlay is modal, so movement belongs to it while it is open.
+        // Letting these through would move a selection nobody can see, behind
+        // something covering it.
+        if self.open_overlay_kind() == Some(Overlay::Queue) {
+            match action {
+                Action::MoveDown => return self.move_queue_cursor(1),
+                Action::MoveUp => return self.move_queue_cursor(-1),
+                Action::PageDown => return self.move_queue_cursor(self.page()),
+                Action::PageUp => return self.move_queue_cursor(-self.page()),
+                Action::PlaySelection => {
+                    if let Some(index) = self.queue_cursor {
+                        self.send(Command::SetPosition(index));
+                    }
+                    return Task::none();
+                }
+                _ => {}
+            }
+        }
+
         match action {
             Action::MoveDown => return self.move_cursor(1),
             Action::MoveUp => return self.move_cursor(-1),
@@ -890,6 +948,7 @@ impl App {
             rows: self.tracks(),
             selected: self.cursor,
             playing: self.playing,
+            playing_row: None,
             scroll_offset: self.scroll_offset,
             theme: &self.theme,
             id: TABLE_ID,
@@ -1009,7 +1068,7 @@ impl App {
                         .queue
                         .as_ref()
                         .and_then(scoria_core::PlaybackSource::position),
-                    playing: self.playing,
+                    cursor: self.queue_cursor,
                     scroll_offset: self.queue_scroll,
                     divergence: self.queue_divergence(),
                     theme: &self.theme,
