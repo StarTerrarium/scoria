@@ -227,8 +227,11 @@ Multiple roots and named libraries are explicitly out of scope. Music spread acr
 
 ### 5.2 Scanning
 
-- `notify` watches the root continuously.
-- An explicit rescan is always available.
+- `notify` watches the root continuously, and a change triggers a rescan without being asked.
+- **Scanning runs on its own thread with its own database handle**, never on the frontend's. A scan of a large library takes seconds, and doing it inline would freeze the window every time a file landed. This is what the WAL journal is for: the scan writes while the frontend keeps reading.
+- **A scan runs once at startup**, to catch up on whatever changed while nothing was running. Watching only reports events it was present for, so without this a library edited between sessions stays stale until it is edited again. It is silent when it finds nothing.
+- A frontend learns about all of this through the ordinary event stream -- `ScanProgress`, then `LibraryChanged`. It must reload its index when one arrives: the scan ran against a different handle, so the index it queries is a copy.
+- An explicit rescan is always available. Watching cannot see everything -- a network mount, a filesystem that reports no events -- so the manual path is not a convenience.
 - Files that disappear are marked unavailable rather than deleted (§7.4).
 - FLAC is the first-class target for 1.0; broad format support is a pre-1.0-release requirement but comes after the FLAC path works end to end.
 

@@ -110,6 +110,7 @@ impl App {
         let session = Session::open(paths)?;
         let mut app = Self::with_session(Some(session), String::new());
         app.refresh();
+        app.begin_watching();
         Ok(app)
     }
 
@@ -146,6 +147,23 @@ impl App {
             scroll_offset: 0.0,
             viewport_height: 650.0,
             status,
+        }
+    }
+
+    /// Starts watching the library, if there is one to watch.
+    ///
+    /// A missing root is the ordinary first-run state (§5.1), not a failure, so
+    /// it is reported in the status line rather than treated as an error.
+    fn begin_watching(&mut self) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        match session.start_watching() {
+            Ok(()) => {}
+            Err(scoria_core::error::CoreError::NoLibraryRoot) => {
+                self.status = "no library root set -- run `scoria scan <path>`".to_owned();
+            }
+            Err(e) => self.status = format!("cannot watch the library: {e}"),
         }
     }
 
@@ -234,6 +252,7 @@ impl App {
     fn drain_core_events(&mut self) {
         let Some(session) = &self.session else { return };
         let events = session.drain_events();
+        let mut library_changed = None;
         for event in events {
             match event {
                 CoreEvent::TrackChanged { track, .. } => {
@@ -260,11 +279,50 @@ impl App {
                     self.shuffled = source.is_shuffled();
                     self.repeat = source.repeat();
                 }
-                CoreEvent::LibraryChanged(_) => self.refresh(),
+                CoreEvent::LibraryChanged(delta) => {
+                    // The scan happened on another thread against its own
+                    // database handle, so this session's index is a stale copy
+                    // until it is told to re-read.
+                    library_changed = Some(delta);
+                }
+                CoreEvent::ScanProgress { seen, total } => {
+                    self.status = match total {
+                        Some(total) => format!("scanning {seen}/{total}"),
+                        None => format!("scanning {seen}"),
+                    };
+                }
                 CoreEvent::Error(e) => self.status = format!("{e}"),
-                CoreEvent::QueryResult(..) | CoreEvent::ScanProgress { .. } => {}
+                CoreEvent::QueryResult(..) => {}
             }
         }
+
+        // Done after the drain rather than inside it, so a scan reporting three
+        // deltas reloads once instead of three times.
+        if let Some(delta) = library_changed {
+            self.on_library_changed(&delta);
+        }
+    }
+
+    /// Brings the view back in line with the library after a background scan.
+    fn on_library_changed(&mut self, delta: &scoria_core::event::LibraryDelta) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        if let Err(e) = session.reload_index() {
+            self.status = format!("{e}");
+            return;
+        }
+
+        // Keep the cursor on the same track rather than the same row number:
+        // a scan can insert tracks above it, and holding the index would move
+        // the selection to whatever landed there.
+        let anchored = self.cursor.and_then(|index| self.rows.get(index).copied());
+        self.refresh();
+        if let Some(track) = anchored {
+            self.cursor = self.rows.iter().position(|id| *id == track);
+        }
+
+        self.status = describe(delta, self.rows.len());
     }
 
     fn on_table(&mut self, event: table::Event) {
@@ -445,6 +503,11 @@ impl App {
             Action::ToggleShuffle => self.send(Command::SetShuffle(!self.shuffled)),
             Action::CycleRepeat => self.send(Command::SetRepeat(next_repeat(self.repeat))),
             Action::JumpToPlaying => return self.jump_to_playing(),
+            Action::Rescan => match self.session.as_ref().map(Session::request_rescan) {
+                Some(Ok(())) => self.status = "rescanning...".to_owned(),
+                Some(Err(e)) => self.status = format!("{e}"),
+                None => {}
+            },
             Action::CycleLayout => {
                 self.placement = self.placement.cycle();
                 self.status = self.placement.label().to_owned();
@@ -760,5 +823,18 @@ const fn next_repeat(current: RepeatMode) -> RepeatMode {
         RepeatMode::Off => RepeatMode::All,
         RepeatMode::All => RepeatMode::One,
         RepeatMode::One => RepeatMode::Off,
+    }
+}
+
+/// A one-line summary of what a scan changed, for the status bar.
+fn describe(delta: &scoria_core::event::LibraryDelta, showing: usize) -> String {
+    use scoria_core::event::LibraryDelta as D;
+    match delta {
+        D::TracksAdded(ids) => format!("{} track(s) added -- showing {showing}", ids.len()),
+        D::TracksRemoved(ids) => format!("{} track(s) removed -- showing {showing}", ids.len()),
+        // §7.4: files that vanish are struck through, not dropped, so this is a
+        // change in how rows look rather than in how many there are.
+        D::AvailabilityChanged(ids) => format!("{} track(s) went missing or came back", ids.len()),
+        D::Invalidated => format!("library reloaded -- showing {showing}"),
     }
 }

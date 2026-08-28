@@ -1,0 +1,262 @@
+//! Background watching and rescanning.
+//!
+//! These drive `Session` the way a frontend does -- start watching, change the
+//! library on disk, wait for events -- because the two bugs that reached the
+//! window at M7 were both wiring rather than logic, and unit tests over pure
+//! functions could not have caught either.
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use lofty::config::WriteOptions;
+use lofty::prelude::{ItemKey, TagExt};
+use lofty::tag::{Tag, TagType};
+use scoria_core::config::Paths;
+use scoria_core::event::{Event, LibraryDelta};
+use scoria_core::session::Session;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+const SILENCE: &[u8] = include_bytes!("fixtures/silence.flac");
+
+/// A scratch home: settings, database and library root all under one directory.
+struct Scratch {
+    dir: PathBuf,
+}
+
+impl Scratch {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "scoria-watch-{}-{name}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("music")).unwrap();
+        Self { dir }
+    }
+
+    fn root(&self) -> PathBuf {
+        self.dir.join("music")
+    }
+
+    fn session(&self) -> Session {
+        let mut session = Session::open(Paths::rooted_at(&self.dir)).unwrap();
+        session.config_mut().root = Some(self.root());
+        session
+    }
+
+    fn write_track(&self, relative: &str, title: &str) -> PathBuf {
+        let path = self.root().join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, SILENCE).unwrap();
+
+        let mut tag = Tag::new(TagType::VorbisComments);
+        tag.insert_text(ItemKey::TrackTitle, title.to_owned());
+        tag.insert_text(ItemKey::AlbumArtist, "Watched".to_owned());
+        tag.insert_text(ItemKey::AlbumTitle, "Album".to_owned());
+        tag.save_to_path(&path, WriteOptions::default()).unwrap();
+        path
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Waits for a library change, reloading the index the way a frontend does.
+///
+/// Generous: filesystem watching involves a settling period by design (§5.2),
+/// and on a loaded machine the platform's own notification can lag too.
+fn wait_for_change(session: &mut Session, what: &str) -> LibraryDelta {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if let Some(event) = session.next_event(Duration::from_millis(200))
+            && let Event::LibraryChanged(delta) = event
+        {
+            session.reload_index().unwrap();
+            return delta;
+        }
+    }
+    panic!("timed out waiting for {what}");
+}
+
+#[test]
+fn a_new_file_is_indexed_without_being_asked() {
+    let scratch = Scratch::new("added");
+    scratch.write_track("a/01.flac", "First");
+
+    let mut session = scratch.session();
+    session.request_rescan().unwrap_err(); // Not watching yet.
+    session.start_watching().unwrap();
+    wait_for_change(&mut session, "the initial scan");
+    assert_eq!(session.index().len(), 1);
+
+    scratch.write_track("a/02.flac", "Second");
+    wait_for_change(&mut session, "the new file");
+
+    assert_eq!(
+        session.index().len(),
+        2,
+        "the added track should be indexed"
+    );
+    assert!(session.index().tracks().iter().any(|t| t.title == "Second"));
+}
+
+#[test]
+fn a_deleted_file_is_marked_missing_rather_than_dropped() {
+    // §7.4, end to end and unattended: a vanished file is struck through, not
+    // removed, so playback can say what will happen to it.
+    let scratch = Scratch::new("deleted");
+    let path = scratch.write_track("a/01.flac", "First");
+    scratch.write_track("a/02.flac", "Second");
+
+    let mut session = scratch.session();
+    session.start_watching().unwrap();
+    wait_for_change(&mut session, "the initial scan");
+    assert_eq!(session.index().len(), 2);
+
+    std::fs::remove_file(&path).unwrap();
+    wait_for_change(&mut session, "the deletion");
+
+    assert_eq!(session.index().len(), 2, "the row must survive the file");
+    let gone = session
+        .index()
+        .tracks()
+        .iter()
+        .find(|t| t.title == "First")
+        .unwrap();
+    assert!(!gone.available);
+}
+
+#[test]
+fn an_explicit_rescan_works_even_when_nothing_changed() {
+    // §5.2: watching *and* an explicit rescan. Watching cannot see everything --
+    // a network mount, a filesystem that reports no events -- so the manual
+    // path is not a convenience.
+    let scratch = Scratch::new("explicit");
+    scratch.write_track("a/01.flac", "First");
+
+    let mut session = scratch.session();
+    session.start_watching().unwrap();
+    wait_for_change(&mut session, "the initial scan");
+
+    // Written without touching the watched tree's mtimes in a way we rely on:
+    // the point is that the request alone is enough.
+    scratch.write_track("a/02.flac", "Second");
+    session.request_rescan().unwrap();
+    wait_for_change(&mut session, "the requested scan");
+
+    assert_eq!(session.index().len(), 2);
+}
+
+#[test]
+fn watching_twice_is_harmless() {
+    let scratch = Scratch::new("twice");
+    scratch.write_track("a/01.flac", "First");
+
+    let mut session = scratch.session();
+    session.start_watching().unwrap();
+    session.start_watching().unwrap();
+    wait_for_change(&mut session, "the initial scan");
+    assert_eq!(session.index().len(), 1);
+}
+
+#[test]
+fn watching_without_a_root_is_refused_rather_than_started() {
+    let scratch = Scratch::new("norot");
+    let mut session = Session::open(Paths::rooted_at(&scratch.dir)).unwrap();
+    assert!(matches!(
+        session.start_watching(),
+        Err(scoria_core::error::CoreError::NoLibraryRoot)
+    ));
+}
+
+#[test]
+fn dropping_the_session_stops_the_scan_thread() {
+    // The handle joins on drop, so this hanging is the failure mode -- a thread
+    // left scanning a library nothing is looking at any more.
+    let scratch = Scratch::new("shutdown");
+    scratch.write_track("a/01.flac", "First");
+
+    let mut session = scratch.session();
+    session.start_watching().unwrap();
+    wait_for_change(&mut session, "the initial scan");
+
+    let started = Instant::now();
+    drop(session);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "shutdown took {:?}, which suggests the thread was not asked to stop",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn the_index_is_stale_until_it_is_reloaded() {
+    // The contract `start_watching` documents: the scan runs against its own
+    // database handle, so the session's index is a copy that must be told to
+    // re-read. A frontend that ignores this shows a library that never changes.
+    let scratch = Scratch::new("stale");
+    scratch.write_track("a/01.flac", "First");
+
+    let mut session = scratch.session();
+    session.start_watching().unwrap();
+    wait_for_change(&mut session, "the initial scan");
+
+    scratch.write_track("a/02.flac", "Second");
+
+    // Wait for the change without reloading.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut seen = false;
+    while Instant::now() < deadline && !seen {
+        if let Some(Event::LibraryChanged(_)) = session.next_event(Duration::from_millis(200)) {
+            seen = true;
+        }
+    }
+    assert!(seen, "timed out waiting for the change");
+
+    assert_eq!(
+        session.index().len(),
+        1,
+        "the index should not update itself"
+    );
+    session.reload_index().unwrap();
+    assert_eq!(
+        session.index().len(),
+        2,
+        "reloading should pick the change up"
+    );
+}
+
+#[test]
+fn scan_progress_is_reported_while_it_runs() {
+    let scratch = Scratch::new("progress");
+    for n in 1..=5 {
+        scratch.write_track(&format!("a/{n:02}.flac"), &format!("Track {n}"));
+    }
+
+    let mut session = scratch.session();
+    session.start_watching().unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut progress = false;
+    while Instant::now() < deadline && !progress {
+        if let Some(Event::ScanProgress { total, .. }) =
+            session.next_event(Duration::from_millis(200))
+        {
+            progress = total.is_some();
+        }
+    }
+    assert!(progress, "a background scan should report progress");
+}
+
+/// The fixture has to be a real FLAC for any of this to mean anything.
+#[test]
+fn the_fixture_is_readable() {
+    let scratch = Scratch::new("fixture");
+    let path = scratch.write_track("a/01.flac", "First");
+    assert!(Path::new(&path).exists());
+    assert!(scoria_core::library::tags::read(&path).is_ok());
+}

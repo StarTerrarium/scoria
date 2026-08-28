@@ -72,6 +72,7 @@ impl Trigger {
                 Named::F1 => Self::Function(1),
                 Named::F2 => Self::Function(2),
                 Named::F3 => Self::Function(3),
+                Named::F5 => Self::Function(5),
                 _ => return None,
             }),
             Key::Unidentified => None,
@@ -209,6 +210,8 @@ impl Keymap {
             Binding::new(T::Char('?'), Mods::NONE, A::ToggleHelp),
             Binding::new(T::Char('/'), Mods::NONE, A::FocusSearch),
             Binding::new(T::Function(1), Mods::NONE, A::ToggleHelp),
+            // F5, because that is where every application puts refresh.
+            Binding::new(T::Function(5), Mods::NONE, A::Rescan),
         ];
 
         Self {

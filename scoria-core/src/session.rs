@@ -28,7 +28,10 @@ use crate::query::sort::SortChain;
 use crate::query::{QueryEngine, QueryOutcome, Selection};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 /// Everything the core needs to answer a frontend.
 pub struct Session {
@@ -42,6 +45,34 @@ pub struct Session {
     inbox: Receiver<Event>,
     /// Started on first use, so listing a library does not require a sound card.
     playback: Option<PlaybackHandle>,
+    /// Watches the root and rescans in the background. See [`Session::start_watching`].
+    watcher: Option<WatchHandle>,
+}
+
+/// How long the watch thread waits before checking whether it should stop.
+///
+/// Also the worst-case delay on an explicit rescan request, which is why it is
+/// short rather than convenient.
+const WATCH_POLL: Duration = Duration::from_millis(250);
+
+/// A running watch thread.
+///
+/// Dropping it stops the thread and waits for it, so a session cannot leave one
+/// behind scanning a library nothing is looking at any more.
+#[derive(Debug)]
+struct WatchHandle {
+    stop: Arc<AtomicBool>,
+    rescan: Sender<()>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for WatchHandle {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 impl Session {
@@ -67,6 +98,7 @@ impl Session {
             events,
             inbox,
             playback: None,
+            watcher: None,
         })
     }
 
@@ -123,12 +155,157 @@ impl Session {
 
     /// Watches the library root for changes (§5.2).
     ///
+    /// Returns the watcher for a caller that wants to drive it itself. Most
+    /// callers want [`Session::start_watching`] instead.
+    ///
     /// # Errors
     ///
     /// [`CoreError::NoLibraryRoot`] if no root is configured, or
     /// [`CoreError::Database`] if the platform watcher cannot be created.
     pub fn watch(&self) -> Result<LibraryWatcher, CoreError> {
         LibraryWatcher::watch(self.config.root()?)
+    }
+
+    /// Watches the root and rescans in the background when it changes (§5.2).
+    ///
+    /// The scan runs on its own thread with its own database handle rather than
+    /// on the caller's. Scanning a large library takes seconds, and a frontend
+    /// that did it inline would freeze for that long every time a file landed.
+    /// This is what the WAL journal enabled in `db::sqlite` is for: the scan
+    /// writes while the frontend keeps reading.
+    ///
+    /// Results arrive as ordinary events -- `ScanProgress` while it runs, then
+    /// `LibraryChanged`. A frontend that already handles those needs no new
+    /// code path; it does need to call [`Session::reload_index`] when one
+    /// arrives, because the copy this session queries is its own.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::NoLibraryRoot`] if no root is configured, or
+    /// [`CoreError::Database`] if the watcher or the second database handle
+    /// cannot be opened.
+    pub fn start_watching(&mut self) -> Result<(), CoreError> {
+        if self.watcher.is_some() {
+            return Ok(());
+        }
+
+        let root = self.library_root()?;
+        let watcher = LibraryWatcher::watch(&root)?;
+        // A separate handle, not a shared one: the scan thread writes while the
+        // frontend reads, which is the whole point of doing this elsewhere.
+        let mut db = SqliteDatabase::open(&self.paths.database())?;
+        let artwork = ArtworkCache::new(self.paths.artwork_cache());
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let (rescan_tx, rescan_rx) = channel::<()>();
+        let events = self.events.clone();
+        let thread_stop = Arc::clone(&stop);
+
+        let thread = std::thread::Builder::new()
+            .name("scoria-scan".to_owned())
+            .spawn(move || {
+                // Scan once before watching, to catch up on whatever changed
+                // while nothing was running. Watching only reports events it
+                // was present for, so without this a library edited between
+                // sessions would stay stale until it was edited again.
+                //
+                // Silent when it finds nothing: an unchanged library produces
+                // no deltas and therefore no events.
+                let mut scan_now = true;
+
+                while !thread_stop.load(Ordering::Acquire) {
+                    if !scan_now {
+                        // Either the filesystem settled after a change, or
+                        // someone asked for a scan outright (§5.2: an explicit
+                        // rescan is always available).
+                        let changed = watcher.next_change(WATCH_POLL).is_some();
+                        let requested = rescan_rx.try_recv().is_ok();
+                        if !changed && !requested {
+                            continue;
+                        }
+                    }
+                    scan_now = false;
+                    // Drain any further requests that piled up, so a burst
+                    // becomes one scan rather than a queue of them.
+                    while rescan_rx.try_recv().is_ok() {}
+
+                    let scanner = Scanner::new(&root).with_artwork(&artwork);
+                    let mut report = |progress: ScanProgress| {
+                        let _ = events.send(Event::ScanProgress {
+                            seen: progress.seen,
+                            total: progress.total,
+                        });
+                    };
+
+                    match scanner.scan(&mut db, &mut report) {
+                        Ok(outcome) => {
+                            let deltas = outcome.deltas();
+                            if deltas.is_empty() {
+                                // Nothing changed after all -- a temporary file,
+                                // or our own artwork cache being written. Saying
+                                // so anyway would make the frontend reload the
+                                // library for nothing.
+                                continue;
+                            }
+                            for delta in deltas {
+                                let _ = events.send(Event::LibraryChanged(delta));
+                            }
+                        }
+                        Err(e) => {
+                            let _ = events.send(Event::Error(e));
+                        }
+                    }
+                }
+            })
+            .map_err(|e| CoreError::Database(format!("cannot start the scan thread: {e}")))?;
+
+        self.watcher = Some(WatchHandle {
+            stop,
+            rescan: rescan_tx,
+            thread: Some(thread),
+        });
+        Ok(())
+    }
+
+    /// Asks the watch thread to scan now.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Database`] if watching was never started or the thread has
+    /// stopped.
+    pub fn request_rescan(&self) -> Result<(), CoreError> {
+        match &self.watcher {
+            Some(handle) => handle
+                .rescan
+                .send(())
+                .map_err(|_| CoreError::Database("the scan thread has stopped".to_owned())),
+            None => Err(CoreError::Database(
+                "library watching is not running".to_owned(),
+            )),
+        }
+    }
+
+    /// Re-reads the library index from storage.
+    ///
+    /// Call this on `Event::LibraryChanged`. The index is a projection of the
+    /// database, and a background scan changes the database without touching
+    /// this copy of it.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Database`] if storage cannot be read.
+    pub fn reload_index(&mut self) -> Result<(), CoreError> {
+        self.index = LibraryIndex::load(&self.db)?;
+
+        // The audio thread resolves against its own copy, so it needs the new
+        // one -- but only after the scan, so a rescan mid-album cannot disturb
+        // what is playing (§6.1).
+        if self.playback.is_some() {
+            let root = self.library_root()?;
+            let resolver = Arc::new(IndexResolver::new(self.index.clone(), root));
+            self.send_to_engine(EngineCommand::SetResolver(resolver))?;
+        }
+        Ok(())
     }
 
     // ------------------------------------------------------------ commands --

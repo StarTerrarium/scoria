@@ -39,6 +39,13 @@ pub enum Action {
     /// Restore an unfiltered library view and scroll to the playing track
     /// (§6.5).
     JumpToPlaying,
+    /// Rescan the library now.
+    ///
+    /// §5.2: the root is watched continuously *and* an explicit rescan is
+    /// always available. Watching cannot see everything -- a network mount, a
+    /// filesystem that does not report events -- so the manual path is not a
+    /// convenience.
+    Rescan,
     /// Cycle `BrowserPlacement` (§7.1). One keystroke, three layouts.
     CycleLayout,
     FocusSearch,
@@ -62,7 +69,7 @@ pub enum Action {
 impl Action {
     /// Every action, so a keymap can be checked for gaps.
     #[must_use]
-    pub const fn all() -> [Self; 20] {
+    pub const fn all() -> [Self; 21] {
         [
             Self::MoveUp,
             Self::MoveDown,
@@ -79,6 +86,7 @@ impl Action {
             Self::ToggleShuffle,
             Self::CycleRepeat,
             Self::JumpToPlaying,
+            Self::Rescan,
             Self::CycleLayout,
             Self::FocusSearch,
             Self::ToggleQueue,
@@ -106,6 +114,7 @@ impl Action {
             Self::ToggleShuffle => "Shuffle",
             Self::CycleRepeat => "Repeat: off, all, one",
             Self::JumpToPlaying => "Jump to what is playing",
+            Self::Rescan => "Rescan the library",
             Self::CycleLayout => "Cycle the browser placement",
             Self::FocusSearch => "Search",
             Self::ToggleQueue => "Show the queue",
