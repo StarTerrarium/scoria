@@ -176,6 +176,8 @@ This distinction runs through the entire application.
 
 The filter pane is always built from `albumartist`. `artist` never drives structure.
 
+The payoff shows up somewhere unplanned. Because sorting and grouping read `albumartist` regardless of which columns are visible, the album artist column can be hidden entirely and the ordering, the grouping and the pane are all unaffected -- a library still grouped by `Electric Callboy` while every row reads `Electric Callboy feat. Conquer Divide`. Displaying both columns purely to sort by one is a workaround this separation removes the need for.
+
 ### 4.2 Album identity
 
 The library is assumed to be tagged with MusicBrainz Picard. That makes album identity a lookup rather than a heuristic:
