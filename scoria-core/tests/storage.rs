@@ -596,11 +596,13 @@ fn a_missing_config_file_yields_defaults() {
 #[test]
 fn config_survives_a_round_trip() {
     let path = tempdir().join("round-trip.toml");
-    let config = LibraryConfig {
-        root: Some("/home/someone/Music".into()),
-        play_behaviour: PlayBehaviour::WholeLibrary,
-        sort: SortPreset::Year,
-    };
+    // Built through the setter rather than as a literal: volume is private so
+    // that nothing can store a value outside the range.
+    let mut config = LibraryConfig::default();
+    config.root = Some("/home/someone/Music".into());
+    config.play_behaviour = PlayBehaviour::WholeLibrary;
+    config.sort = SortPreset::Year;
+    config.set_volume(0.4);
     scoria_core::config::save(&path, &config).unwrap();
     assert_eq!(
         scoria_core::config::load::<LibraryConfig>(&path).unwrap(),
@@ -686,11 +688,10 @@ fn writing_one_section_leaves_the_others_alone() {
     let path = tempdir().join("sections.toml");
     let _ = std::fs::remove_file(&path);
 
-    let library = LibraryConfig {
-        root: Some("/home/someone/Music".into()),
-        play_behaviour: PlayBehaviour::WholeLibrary,
-        sort: SortPreset::Year,
-    };
+    let mut library = LibraryConfig::default();
+    library.root = Some("/home/someone/Music".into());
+    library.play_behaviour = PlayBehaviour::WholeLibrary;
+    library.sort = SortPreset::Year;
     scoria_core::config::save(&path, &library).unwrap();
 
     #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]

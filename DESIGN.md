@@ -521,6 +521,10 @@ Position is reported whenever it moves, not once per second. A seek bar moves co
 
 Shuffle and repeat sit past the seek bar rather than among the transport buttons: they change what happens next, which is a different kind of thing from moving through what is playing now.
 
+Volume persists between launches, and it belongs to the core rather than to a frontend: it is the same volume whichever one set it, and a headless session has one too. The engine starts at full and is told the stored value the moment it starts, so nothing in a frontend has to remember to send it.
+
+It is written once the volume stops moving rather than on every change -- a drag is hundreds of changes and one outcome, and the wheel has no release to hang a write on. The value is clamped on the way in *and* on the way out, because the settings file is meant to be hand-editable (§7.3) and `volume = 40` should be loud rather than whatever the backend does with a gain of forty.
+
 The volume bar takes the mouse wheel while the pointer is over it, a twentieth of the range per notch. Dragging still works: the wheel handler wraps the slider and only sees events the slider ignored. It clamps rather than wrapping, because a wheel that rolled past full and started again at silence would be a genuinely unpleasant surprise on a control people spin.
 
 Symbol buttons only, with hover tooltips. Glyphs have to be ones a system font actually has -- the first attempt used U+2928 for shuffle, which is neither a shuffle symbol nor present in the default font, and rendered as a cross. Jump-to-playing uses a crosshair/target glyph, matching the "reveal current item" convention from editors and file managers.

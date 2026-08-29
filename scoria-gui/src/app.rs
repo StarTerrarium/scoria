@@ -136,6 +136,10 @@ pub struct App {
     shuffled: bool,
     repeat: RepeatMode,
     volume: f32,
+    /// Set when the volume has moved since it was last written out, and when
+    /// it last moved. See `save_volume_if_settled`.
+    volume_unsaved: bool,
+    volume_changed_at: Option<std::time::Instant>,
 
     scroll_offset: f32,
     viewport_height: f32,
@@ -180,6 +184,11 @@ impl App {
         let mut app = Self::with_session(Some(session), String::new());
         app.theme = settings.theme();
         app.placement = settings.placement;
+        // Shown from the settings straight away. The engine is not running
+        // yet -- it starts on the first play -- and applies the same value
+        // itself when it does, so the bar and the audio agree without the
+        // frontend having to send anything.
+        app.volume = app.session.as_ref().map_or(1.0, |s| s.config().volume());
         app.selection.sort = settings.sort.chain();
         app.paths = paths;
         app.settings = settings;
@@ -228,6 +237,8 @@ impl App {
             shuffled: false,
             repeat: RepeatMode::Off,
             volume: 1.0,
+            volume_unsaved: false,
+            volume_changed_at: None,
             scroll_offset: 0.0,
             viewport_height: 650.0,
             status,
@@ -351,6 +362,7 @@ impl App {
             Message::Tick => {
                 self.drain_core_events();
                 self.tick_overlay();
+                self.save_volume_if_settled();
             }
             Message::Table(event) => self.on_table(event),
             Message::Transport(event) => return self.on_transport(event),
@@ -660,6 +672,34 @@ impl App {
                 self.status = "scanning the new library…".to_owned();
             }
             Err(e) => self.status = format!("{e}"),
+        }
+    }
+
+    /// Writes the volume out once it has stopped moving.
+    ///
+    /// A drag across the bar is hundreds of changes and one outcome, and the
+    /// wheel has no release to hang the write on -- so instead of saving per
+    /// change, a tick that finds the volume stale for long enough saves it
+    /// once. The delay is short enough that closing the window straight after
+    /// a change keeps it.
+    fn save_volume_if_settled(&mut self) {
+        const SETTLE: Duration = Duration::from_millis(400);
+
+        if !self.volume_unsaved {
+            return;
+        }
+        let moved_recently = self
+            .volume_changed_at
+            .is_some_and(|at| at.elapsed() < SETTLE);
+        if moved_recently {
+            return;
+        }
+
+        self.volume_unsaved = false;
+        if let Some(session) = &self.session
+            && let Err(e) = session.save_config()
+        {
+            self.status = format!("cannot save settings: {e}");
         }
     }
 
@@ -1024,6 +1064,11 @@ impl App {
             transport::Event::CycleRepeat => Command::SetRepeat(next_repeat(self.repeat)),
             transport::Event::SetVolume(v) => {
                 self.volume = v;
+                // Marked rather than saved: a drag or a spun wheel is hundreds
+                // of these, and the file is written on the next tick that finds
+                // it stale. See `save_volume_if_settled`.
+                self.volume_unsaved = true;
+                self.volume_changed_at = Some(std::time::Instant::now());
                 Command::SetVolume(v)
             }
             transport::Event::JumpToPlaying => return self.jump_to_playing(),

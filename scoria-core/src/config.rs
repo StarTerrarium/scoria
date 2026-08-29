@@ -129,16 +129,60 @@ pub enum PlayBehaviour {
 }
 
 /// The settings `scoria-core` owns.
-#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+///
+/// Not `Eq`, because volume is a float. Everything else here is.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct LibraryConfig {
     /// The single library root (§5.1). `None` until the first-run picker runs.
     pub root: Option<PathBuf>,
     pub play_behaviour: PlayBehaviour,
     pub sort: SortPreset,
+    /// Playback volume, 0 to 1.
+    ///
+    /// Core rather than frontend: a volume that reset when the window closed
+    /// would be a surprise, and it is the same volume whichever frontend set
+    /// it. Read through [`Self::volume`], which is what enforces the range on
+    /// a file anyone can edit.
+    volume: f32,
+}
+
+impl Default for LibraryConfig {
+    fn default() -> Self {
+        Self {
+            root: None,
+            play_behaviour: PlayBehaviour::default(),
+            sort: SortPreset::default(),
+            // Full, because a player that starts quiet looks broken.
+            volume: 1.0,
+        }
+    }
 }
 
 impl LibraryConfig {
+    /// The stored volume, always within range.
+    ///
+    /// Clamped on the way out rather than trusted: this file is meant to be
+    /// hand-editable (§7.3), and `volume = 40` should be loud rather than
+    /// whatever the backend does with a gain of forty.
+    #[must_use]
+    pub fn volume(&self) -> f32 {
+        if self.volume.is_finite() {
+            self.volume.clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// Records the volume, clamped.
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+    }
+
     /// The configured root, or an error naming what the user needs to do.
     ///
     /// # Errors
@@ -270,4 +314,49 @@ fn write_atomically<T: Serialize>(path: &Path, value: &T) -> Result<(), CoreErro
     fs::rename(&temporary, path)
         .map_err(|e| CoreError::Config(format!("cannot replace {}: {e}", path.display())))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::float_cmp, clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn the_volume_starts_full() {
+        // A player that opens quiet looks broken, and the first thing anyone
+        // would do is reach for the volume they cannot hear.
+        assert_eq!(LibraryConfig::default().volume(), 1.0);
+    }
+
+    #[test]
+    fn a_hand_edited_volume_is_brought_into_range() {
+        // This file is meant to be edited by hand (§7.3), so `volume = 40`
+        // should be loud rather than whatever the backend does with a gain of
+        // forty.
+        let mut config = LibraryConfig::default();
+        for (written, expected) in [(40.0, 1.0), (-3.0, 0.0), (0.5, 0.5)] {
+            config.set_volume(written);
+            assert_eq!(config.volume(), expected, "{written} was stored as written");
+        }
+    }
+
+    #[test]
+    fn a_volume_that_is_not_a_number_falls_back_to_full() {
+        // NaN compares false against everything, so a clamp alone would let it
+        // through and every later comparison would quietly misbehave.
+        let mut config = LibraryConfig::default();
+        config.set_volume(f32::NAN);
+        assert_eq!(config.volume(), 1.0);
+        config.set_volume(f32::INFINITY);
+        assert_eq!(config.volume(), 1.0);
+    }
+
+    #[test]
+    fn a_volume_read_from_a_file_is_clamped_too() {
+        // The setter is not the only way in: serde writes the field directly.
+        let text = "volume = 12.0\n";
+        let config: LibraryConfig = toml::from_str(text).unwrap();
+        assert_eq!(config.volume(), 1.0);
+    }
 }

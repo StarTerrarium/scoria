@@ -121,6 +121,9 @@ fn info(session: &Session, out: &mut Out) -> Result<()> {
         .iter()
         .filter(|t| t.replay_gain.is_tagged())
         .count();
+    // The stored volume, which is a setting like the others and the only way
+    // to see it without a window.
+    writeln!(out, "volume    {:.0}%", session.config().volume() * 100.0)?;
     writeln!(out, "replaygain {tagged}/{} tracks tagged", outcome.total)?;
     if tagged < outcome.total && outcome.total > 0 {
         writeln!(

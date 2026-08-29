@@ -536,7 +536,13 @@ impl Session {
             Command::Previous => self.send_to_engine(EngineCommand::Previous),
             Command::Seek(position) => self.send_to_engine(EngineCommand::Seek(position)),
             Command::SeekBy(millis) => self.send_to_engine(EngineCommand::SeekBy(millis)),
-            Command::SetVolume(v) => self.send_to_engine(EngineCommand::SetVolume(v)),
+            Command::SetVolume(v) => {
+                // Kept in the settings as it changes, written out separately:
+                // a drag is hundreds of these and the file should not be
+                // rewritten for each one.
+                self.config.set_volume(v);
+                self.send_to_engine(EngineCommand::SetVolume(self.config.volume()))
+            }
             Command::SetPosition(p) => self.send_to_engine(EngineCommand::SetPosition(p)),
             Command::SetShuffle(on) => self.send_to_engine(EngineCommand::SetShuffle(on)),
             Command::SetRepeat(mode) => self.send_to_engine(EngineCommand::SetRepeat(mode)),
@@ -652,6 +658,11 @@ impl Session {
     pub fn start_playback(&mut self, backend: Box<dyn AudioBackend>) -> Result<(), CoreError> {
         let resolver = Arc::new(IndexResolver::new(self.index.clone(), self.library_root()?));
         self.playback = Some(spawn(backend, resolver, self.events.clone())?);
+        // The engine starts at full volume and knows nothing about the
+        // settings, so the stored one is applied the moment there is something
+        // to apply it to. Done here rather than in a frontend, so every
+        // frontend gets it without asking.
+        self.send_to_engine(EngineCommand::SetVolume(self.config.volume()))?;
         Ok(())
     }
 
