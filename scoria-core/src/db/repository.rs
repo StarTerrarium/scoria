@@ -104,6 +104,18 @@ pub trait TrackRepository {
     /// [`CoreError::Database`] on failure.
     fn set_available(&mut self, ids: &[TrackId], available: bool) -> Result<(), CoreError>;
 
+    /// Counts one play of a track, returning the new total (§6.8).
+    ///
+    /// A method of its own rather than a field on [`NewTrack`], because a
+    /// rescan writes every other field and must never be able to write this
+    /// one. Incremented in the statement rather than read-modify-written here,
+    /// so a scan running at the same time cannot lose a play.
+    ///
+    /// # Errors
+    /// [`CoreError::Database`] on failure, [`CoreError::NoSuchTrack`] if the id
+    /// is not in the library.
+    fn record_play(&mut self, id: TrackId) -> Result<u32, CoreError>;
+
     /// Every path currently indexed, for the scanner to diff against the disk.
     ///
     /// # Errors

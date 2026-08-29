@@ -90,6 +90,19 @@ impl LibraryIndex {
         self.tracks.get(*self.positions.get(&id)?)
     }
 
+    /// Counts one play against the in-memory copy (§6.8).
+    ///
+    /// Storage is the source of truth and is written separately; this keeps the
+    /// index agreeing with it without reloading the library, which is what lets
+    /// the number change in the table as the track plays.
+    pub fn record_play(&mut self, id: TrackId) {
+        if let Some(&position) = self.positions.get(&id)
+            && let Some(track) = self.tracks.get_mut(position)
+        {
+            track.play_count = track.play_count.saturating_add(1);
+        }
+    }
+
     /// Resolves ids to rows, preserving the caller's order and skipping ids
     /// that are no longer present.
     ///

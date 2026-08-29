@@ -371,6 +371,20 @@ The toggle is a fair ask and is a different question from the one §6.7 settles.
 
 Levelling tracks the tags say nothing about is the harder half and needs a decision this document does not yet make. Computing gain by analysing audio is explicitly out (§6.7); that is `rsgain`'s job. A real-time normaliser is a different thing again -- it would work on untagged material, but it changes dynamics rather than just offsetting level, and doing it well is a project in itself. Neither belongs in 1.0.
 
+### 6.8 Play counts
+
+How many times each track has been played, kept because it is a pleasing thing to know rather than because anything depends on it. It drives no behaviour: nothing sorts by it unless asked, nothing recommends, nothing hides a track for being unplayed.
+
+**A play is half the track, or four minutes, whichever comes first.** Counting on *start* would make the number measure "tracks begun", which rises fastest when someone is skipping through a record looking for one song -- the opposite of what it should reward. The four-minute cap is for long pieces, where half of twenty minutes is a far higher bar than half of a single and would quietly under-count them. This is the rule scrobbling has used for twenty years, and that is worth something on its own: whatever it counts, people already expect.
+
+Judged on the position reached, not on time spent listening, so seeking past the halfway point counts. Tracking real listening time means accumulating it across pauses, seeks and repeats, which is a great deal of machinery for a number kept because it is fun. Repeat-one counts each time round, since each is a play.
+
+**A rescan cannot reset it, and that is structural rather than careful.** `play_count` is not a field on `NewTrack`, so the scanner has no way to write it; the only thing that can is `record_play`, which increments in the statement rather than reading and writing back, so a scan touching the same row cannot lose a play. A counter that reset whenever the library was rescanned -- which happens on its own, in the background (§5.2) -- would be worse than not keeping one.
+
+A track's identity is its path (§5.2), so renaming a file outside Scoria starts it over. That is the same limitation availability has, and the same fix would serve both if it ever matters enough.
+
+The column is blank rather than `0` for something never played: a column of zeroes is noise, and the rows with numbers in them are the point.
+
 ---
 
 ## 7. The library view
@@ -431,7 +445,7 @@ The layout is repaired when read. A settings file can be older than the applicat
 
 Default columns: track number, title, duration, album artist, artist, album, year. Album artist and artist both shown by default, deliberately (§4.1).
 
-**Eleven more are available and off.** Disc, release date, date added, genre, composer, ReplayGain, file format, bitrate, sample rate, bit depth, and the file's path. A library-centric player is also where someone goes to answer questions *about* their library -- which of these are untagged, which are the lossy ones, what the 24-bit rips are -- and the answers are in the tags already.
+**Twelve more are available and off.** Disc, release date, date added, genre, composer, ReplayGain, file format, bitrate, sample rate, bit depth, play count (§6.8), and the file's path. A library-centric player is also where someone goes to answer questions *about* their library -- which of these are untagged, which are the lossy ones, what the 24-bit rips are -- and the answers are in the tags already.
 
 They are off by default and every one of them stays off on upgrade: the layout is repaired when read, and a column a settings file has never heard of is appended hidden. Appending it visible would rearrange a table someone had already arranged.
 

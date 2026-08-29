@@ -118,6 +118,8 @@ pub enum SortField {
     /// The track's own ReplayGain, in decibels. Missing where the file is not
     /// tagged, which is the point of showing it (§6.7).
     TrackGain,
+    /// How many times it has been played (§6.8).
+    PlayCount,
     /// The path, relative to the library root. For finding one's way around a
     /// library rather than for listening to it.
     Path,
@@ -177,6 +179,9 @@ impl SortField {
             // As text, which is what it is. A path that is not valid UTF-8
             // sorts as missing rather than as an empty string, so it lands with
             // the other unknowns instead of at the top.
+            // Never missing: a track that has never been played has been
+            // played nought times, which is a number and sorts like one.
+            Self::PlayCount => SortValue::Number(i64::from(track.play_count)),
             Self::Path => track
                 .path
                 .as_path()

@@ -26,6 +26,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 2,
         sql: SCHEMA_V2,
     },
+    Migration {
+        version: 3,
+        sql: SCHEMA_V3,
+    },
 ];
 
 /// Metadata that is shown but never structural.
@@ -43,6 +47,16 @@ ALTER TABLE tracks ADD COLUMN composer       TEXT;
 ALTER TABLE tracks ADD COLUMN bitrate_kbps   INTEGER;
 ALTER TABLE tracks ADD COLUMN sample_rate_hz INTEGER;
 ALTER TABLE tracks ADD COLUMN bit_depth      INTEGER;
+";
+
+/// How many times a track has been played (§6.8).
+///
+/// `NOT NULL DEFAULT 0`, so a library that predates the column starts everyone
+/// at nought rather than at "unknown" -- there is no honest number to
+/// reconstruct, and an empty cell would be indistinguishable from a track that
+/// has genuinely never been played.
+const SCHEMA_V3: &str = "
+ALTER TABLE tracks ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0;
 ";
 
 /// The initial schema.

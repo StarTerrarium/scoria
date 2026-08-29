@@ -171,6 +171,9 @@ fn read_track(row: &Row<'_>) -> Result<Track, CoreError> {
         replay_gain: read_gain(row).map_err(map)?,
         added_at: Timestamp(row.get("added_at").map_err(map)?),
         available: row.get::<_, i64>("available").map_err(map)? != 0,
+        // A rescan cannot touch this: it is read here and written only by
+        // `record_play` (§6.8).
+        play_count: read_u32(row, "play_count").map_err(map)?.unwrap_or(0),
         genre: row.get("genre").map_err(map)?,
         composer: row.get("composer").map_err(map)?,
         audio: AudioProperties {
@@ -196,7 +199,7 @@ fn read_album(row: &Row<'_>) -> Result<Album, CoreError> {
 const TRACK_COLUMNS: &str = "id, album_id, path, title, artist, album_artist, album_artist_sort, \
      album, date_year, date_month, date_day, disc, track_number, duration_ms, \
      rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, added_at, available, \
-     genre, composer, bitrate_kbps, sample_rate_hz, bit_depth";
+     genre, composer, bitrate_kbps, sample_rate_hz, bit_depth, play_count";
 
 const ALBUM_COLUMNS: &str =
     "id, identity, title, album_artist, album_artist_sort, date_year, date_month, date_day";
@@ -375,6 +378,24 @@ impl TrackRepository for SqliteDatabase {
         transaction
             .commit()
             .map_err(db_err("cannot commit availability"))
+    }
+
+    fn record_play(&mut self, id: TrackId) -> Result<u32, CoreError> {
+        // Incremented in the statement rather than read here and written back,
+        // so a scan writing the same row cannot lose a play between the two.
+        let count: i64 = self
+            .conn
+            .query_row(
+                "UPDATE tracks SET play_count = play_count + 1 WHERE id = ?1
+                 RETURNING play_count",
+                params![id.get().cast_signed()],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => CoreError::NoSuchTrack(id.get()),
+                other => CoreError::Database(format!("cannot record a play: {other}")),
+            })?;
+        Ok(u32::try_from(count).unwrap_or(u32::MAX))
     }
 
     fn all_track_paths(&self) -> Result<Vec<(TrackId, RelativePath)>, CoreError> {

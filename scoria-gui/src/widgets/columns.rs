@@ -622,6 +622,7 @@ mod tests {
             duration: std::time::Duration::from_secs(100),
             replay_gain: scoria_core::ReplayGain::default(),
             added_at: scoria_core::Timestamp(0),
+            play_count: 0,
             genre: None,
             composer: None,
             audio: scoria_core::model::AudioProperties::default(),

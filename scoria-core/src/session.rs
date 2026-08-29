@@ -64,6 +64,9 @@ pub struct Session {
     playing: Option<TrackId>,
     playback_state: PlaybackState,
     position: Duration,
+    /// Whether the track now playing has already been counted (§6.8). Cleared
+    /// by every `TrackChanged`, so repeat-one counts each time round.
+    counted_this_play: bool,
 }
 
 /// How long the watch thread waits before checking whether it should stop.
@@ -71,6 +74,29 @@ pub struct Session {
 /// Also the worst-case delay on an explicit rescan request, which is why it is
 /// short rather than convenient.
 const WATCH_POLL: Duration = Duration::from_millis(250);
+
+/// The most of a track anyone has to hear for it to count as played (§6.8).
+///
+/// Half of it, or four minutes, whichever comes first. `None` for a track whose
+/// length is unknown, which would otherwise have a threshold of zero and be
+/// counted the instant it started.
+///
+/// Half is what makes the number mean "listened to" rather than "started": a
+/// count that rises every time a track is skipped past is not measuring
+/// anything. The four-minute cap is for the long ones, where half of a
+/// twenty-minute piece is a far higher bar than half of a single and would
+/// quietly under-count them.
+///
+/// This is the rule scrobbling has used for twenty years, which is worth
+/// something on its own -- whatever it counts, people already expect.
+fn play_threshold(duration: Duration) -> Option<Duration> {
+    const CAP: Duration = Duration::from_secs(240);
+
+    if duration.is_zero() {
+        return None;
+    }
+    Some((duration / 2).min(CAP))
+}
 
 /// A running watch thread.
 ///
@@ -121,6 +147,7 @@ impl Session {
             playing: None,
             playback_state: PlaybackState::Stopped,
             position: Duration::ZERO,
+            counted_this_play: false,
         })
     }
 
@@ -221,13 +248,54 @@ impl Session {
     }
 
     /// Keeps the little playback state the media controls need.
+    /// Counts the current track if it has been played far enough (§6.8).
+    ///
+    /// Judged on the position reached, not on time spent listening, so seeking
+    /// past the halfway point counts it. Tracking real listening time means
+    /// accumulating it across pauses, seeks and repeats, which is a great deal
+    /// of machinery for a number kept because it is fun.
+    fn count_play_if_earned(&mut self) {
+        if self.counted_this_play {
+            return;
+        }
+        let Some(id) = self.playing else { return };
+        let Some(track) = self.index.track(id) else {
+            return;
+        };
+
+        let Some(threshold) = play_threshold(track.duration) else {
+            return;
+        };
+        if self.position < threshold {
+            return;
+        }
+
+        self.counted_this_play = true;
+        match self.db.record_play(id) {
+            // Storage is the source of truth; the index is a copy, and keeping
+            // it in step is what makes the number change in the table without
+            // reloading the library.
+            Ok(_) => self.index.record_play(id),
+            // Worth reporting but not worth interrupting playback for: a play
+            // count that failed to save is the least of anyone's problems if
+            // the database is unwritable.
+            Err(e) => self.emit(Event::Error(e)),
+        }
+    }
+
     fn observe(&mut self, event: &Event) {
         match event {
             Event::TrackChanged { track, .. } => {
                 self.playing = Some(*track);
                 self.position = Duration::ZERO;
+                // A new track has not been played yet, even if it is the same
+                // one again -- repeat-one counts each time round.
+                self.counted_this_play = false;
             }
-            Event::PositionChanged(position) => self.position = *position,
+            Event::PositionChanged(position) => {
+                self.position = *position;
+                self.count_play_if_earned();
+            }
             Event::PlaybackStateChanged(state) => {
                 self.playback_state = *state;
                 if *state == PlaybackState::Stopped {
@@ -694,5 +762,64 @@ impl Session {
     #[must_use]
     pub fn database(&self) -> &impl TrackRepository {
         &self.db
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn a_play_is_earned_half_way_through() {
+        // Not on starting the track: a count that rises every time something is
+        // skipped past measures nothing (§6.8).
+        assert_eq!(
+            play_threshold(Duration::from_secs(200)),
+            Some(Duration::from_secs(100))
+        );
+        assert_eq!(
+            play_threshold(Duration::from_secs(43)),
+            Some(Duration::from_millis(21_500))
+        );
+    }
+
+    #[test]
+    fn a_long_track_is_capped_rather_than_halved() {
+        // Half of a twenty-minute piece is a far higher bar than half of a
+        // single, and the counts would not be comparable.
+        assert_eq!(
+            play_threshold(Duration::from_secs(1200)),
+            Some(Duration::from_secs(240))
+        );
+        // Eight minutes is exactly where the two rules meet.
+        assert_eq!(
+            play_threshold(Duration::from_secs(480)),
+            Some(Duration::from_secs(240))
+        );
+        assert_eq!(
+            play_threshold(Duration::from_secs(478)),
+            Some(Duration::from_secs(239))
+        );
+    }
+
+    #[test]
+    fn a_short_track_still_has_to_be_played() {
+        // A twenty-second interlude counts at ten seconds. There is no minimum
+        // length: skipping past something short should no more count than
+        // skipping past something long.
+        assert_eq!(
+            play_threshold(Duration::from_secs(20)),
+            Some(Duration::from_secs(10))
+        );
+    }
+
+    #[test]
+    fn a_track_of_unknown_length_is_never_counted() {
+        // Half of nothing is nothing, and a threshold of zero would count the
+        // track the instant it started -- for every track in a library whose
+        // durations failed to read.
+        assert_eq!(play_threshold(Duration::ZERO), None);
     }
 }

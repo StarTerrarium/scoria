@@ -66,10 +66,11 @@ fn a_fresh_database_is_migrated_to_the_latest_schema() {
 
 #[test]
 fn a_database_written_by_an_older_version_keeps_its_tracks() {
-    // The metadata columns arrived by ALTER TABLE, which is the migration shape
-    // most likely to be got wrong -- a rebuild would take the library with it.
-    // What has to survive is the rows: they cost a full rescan to replace, and
-    // an append-only migration list exists so they never have to be.
+    // Every column since v1 arrived by ALTER TABLE, which is the migration
+    // shape most likely to be got wrong -- a rebuild would take the library
+    // with it. What has to survive is the rows: they cost a full rescan to
+    // replace, and an append-only migration list exists so they never have to
+    // be.
     //
     // The old shape is produced by dropping the v2 columns from a current
     // database and winding the version back, which is closer to a real upgrade
@@ -85,12 +86,15 @@ fn a_database_written_by_an_older_version_keeps_its_tracks() {
     }
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
+        // Everything added since v1. One line to extend when a migration adds
+        // a column, and the test then covers that migration too.
         for column in [
             "genre",
             "composer",
             "bitrate_kbps",
             "sample_rate_hz",
             "bit_depth",
+            "play_count",
         ] {
             conn.execute_batch(&format!("ALTER TABLE tracks DROP COLUMN {column}"))
                 .unwrap();
@@ -112,6 +116,45 @@ fn a_database_written_by_an_older_version_keeps_its_tracks() {
     // the next one fills these in; until then they are empty rather than wrong.
     assert_eq!(tracks[0].genre, None);
     assert_eq!(tracks[0].audio.sample_rate_hz, None);
+    // Play counts start at nought rather than at "unknown": there is no honest
+    // number to reconstruct for a library that predates the column.
+    assert_eq!(tracks[0].play_count, 0);
+}
+
+#[test]
+fn a_rescan_cannot_reset_a_play_count() {
+    // The whole reason play_count is not a field on NewTrack. A scan writes
+    // every other column, and a counter that resets whenever the library is
+    // rescanned -- which happens on its own, in the background -- would be
+    // worse than not keeping one.
+    let mut db = db();
+    let album_id = album(&mut db, "Artist", "Album", "2020");
+    let id = db
+        .upsert_track(&new_track(album_id, "a/01.flac", "Title"))
+        .unwrap();
+
+    assert_eq!(db.record_play(id).unwrap(), 1);
+    assert_eq!(db.record_play(id).unwrap(), 2);
+
+    // The same file seen again by a scan, retagged.
+    let mut retagged = new_track(album_id, "a/01.flac", "Retitled");
+    retagged.artist = "Someone Else".to_owned();
+    let same = db.upsert_track(&retagged).unwrap();
+    assert_eq!(same, id, "the upsert should have matched on path");
+
+    let track = db.track(id).unwrap().unwrap();
+    assert_eq!(track.title, "Retitled", "the rescan did not update the row");
+    assert_eq!(track.play_count, 2, "the rescan reset the play count");
+}
+
+#[test]
+fn counting_a_play_of_a_track_that_is_gone_is_an_error_not_a_silent_nothing() {
+    let mut db = db();
+    let missing = TrackId(9999);
+    assert!(matches!(
+        db.record_play(missing),
+        Err(CoreError::NoSuchTrack(_))
+    ));
 }
 
 #[test]

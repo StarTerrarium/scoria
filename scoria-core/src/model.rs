@@ -171,6 +171,12 @@ pub struct Track {
 
     pub replay_gain: ReplayGain,
     pub added_at: Timestamp,
+    /// How many times this track has been played through (§6.8).
+    ///
+    /// Deliberately not part of [`crate::db::NewTrack`]: a rescan must not be
+    /// able to reset it, and the way to guarantee that is for the scanner to
+    /// have no way of writing it.
+    pub play_count: u32,
 
     /// Display only. §7.2 rules out a genre *pane*, because genre is
     /// many-valued and pane rows have to partition the library; a column
