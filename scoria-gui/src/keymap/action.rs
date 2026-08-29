@@ -92,9 +92,11 @@ impl Action {
             Self::ToggleShuffle,
             Self::CycleRepeat,
             Self::JumpToPlaying,
-            Self::Rescan,
-            Self::CycleLayout,
+            // Ordered as the cheatsheet reads them: the one used constantly
+            // before the two that are not.
             Self::FocusSearch,
+            Self::CycleLayout,
+            Self::Rescan,
             Self::ToggleQueue,
             Self::ToggleColumns,
             Self::ToggleSettings,
@@ -102,6 +104,42 @@ impl Action {
             Self::ToggleHelp,
             Self::Dismiss,
         ]
+    }
+
+    /// Which part of the cheatsheet it belongs under.
+    ///
+    /// A method rather than a list in the overlay, so that adding an action
+    /// fails to compile until it has been given a home. A list would simply
+    /// leave the new one out, silently.
+    #[must_use]
+    pub const fn group(self) -> Group {
+        match self {
+            Self::MoveUp
+            | Self::MoveDown
+            | Self::PageUp
+            | Self::PageDown
+            | Self::MoveToStart
+            | Self::MoveToEnd
+            | Self::ExtendUp
+            | Self::ExtendDown => Group::Browsing,
+
+            Self::PlaySelection
+            | Self::PlayPause
+            | Self::Next
+            | Self::Previous
+            | Self::ToggleShuffle
+            | Self::CycleRepeat
+            | Self::JumpToPlaying => Group::Playing,
+
+            Self::FocusSearch | Self::CycleLayout | Self::Rescan => Group::Library,
+
+            Self::ToggleQueue
+            | Self::ToggleColumns
+            | Self::ToggleSettings
+            | Self::ShowProperties
+            | Self::ToggleHelp
+            | Self::Dismiss => Group::Panels,
+        }
     }
 
     /// How the `?` cheatsheet describes it.
@@ -132,6 +170,31 @@ impl Action {
             Self::ShowProperties => "Show track metadata",
             Self::ToggleHelp => "Show this list",
             Self::Dismiss => "Close, or clear the filters",
+        }
+    }
+}
+
+/// The headings the cheatsheet is divided into, in the order it shows them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Group {
+    Browsing,
+    Playing,
+    Library,
+    Panels,
+}
+
+impl Group {
+    /// In reading order: what is in front of you, then what it does, then the
+    /// library as a whole, then the things that open over it.
+    pub const ALL: &'static [Self] = &[Self::Browsing, Self::Playing, Self::Library, Self::Panels];
+
+    #[must_use]
+    pub const fn heading(self) -> &'static str {
+        match self {
+            Self::Browsing => "MOVING AROUND",
+            Self::Playing => "PLAYING",
+            Self::Library => "THE LIBRARY",
+            Self::Panels => "PANELS",
         }
     }
 }

@@ -1076,7 +1076,6 @@ impl App {
             Action::FocusSearch => {
                 return iced::widget::operation::focus(iced::widget::Id::new(SEARCH_ID));
             }
-            // Overlays arrive at M9.
             Action::ToggleQueue => return self.open_overlay(Overlay::Queue),
             Action::ToggleColumns => return self.open_overlay(Overlay::Columns),
             Action::ToggleSettings => return self.open_overlay(Overlay::Settings),
@@ -1086,9 +1085,7 @@ impl App {
                 }
                 self.status = "select a track first".to_owned();
             }
-            // The keybinding cheatsheet is a §8 promise the overlays make
-            // possible; it arrives with the column work at M10.
-            Action::ToggleHelp => {}
+            Action::ToggleHelp => return self.open_overlay(Overlay::Help),
             Action::Dismiss => {
                 // §9: Escape closes the overlay. With none open it clears the
                 // filters instead -- one key backing out of whatever is
@@ -1404,6 +1401,13 @@ impl App {
                 Message::Action(Action::ToggleSettings),
                 self.open_overlay_kind() == Some(Overlay::Settings),
             ),
+            // Appended rather than inserted: the other two have been in the
+            // same place for a while, and a new button should not move them.
+            (
+                "Shortcuts",
+                Message::Action(Action::ToggleHelp),
+                self.open_overlay_kind() == Some(Overlay::Help),
+            ),
         ] {
             header = header.push(
                 button(text(label).size(12))
@@ -1501,6 +1505,10 @@ impl App {
                 },
                 Message::Settings,
             ),
+            Overlay::Help => overlays::help::view(overlays::help::HelpView {
+                keymap: &self.keymap,
+                theme: &self.theme,
+            }),
             Overlay::Columns => overlays::columns::view(
                 overlays::columns::ColumnsView {
                     layout: &self.settings.columns,

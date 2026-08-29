@@ -120,6 +120,53 @@ impl Mods {
     }
 }
 
+impl Trigger {
+    /// How the cheatsheet writes this key.
+    ///
+    /// Here rather than in the overlay because it is a property of the key, not
+    /// of one way of drawing it, and the TUI will want the same words.
+    #[must_use]
+    pub fn label(&self) -> String {
+        match self {
+            Self::Char(c) => c.to_uppercase().to_string(),
+            Self::Space => "Space".to_owned(),
+            Self::Enter => "Enter".to_owned(),
+            Self::Escape => "Esc".to_owned(),
+            Self::Tab => "Tab".to_owned(),
+            Self::Backspace => "Backspace".to_owned(),
+            Self::Delete => "Delete".to_owned(),
+            // Arrows as glyphs: they are what is printed on the key.
+            Self::Up => "↑".to_owned(),
+            Self::Down => "↓".to_owned(),
+            Self::Left => "←".to_owned(),
+            Self::Right => "→".to_owned(),
+            Self::Home => "Home".to_owned(),
+            Self::End => "End".to_owned(),
+            Self::PageUp => "Page Up".to_owned(),
+            Self::PageDown => "Page Down".to_owned(),
+            Self::Function(n) => format!("F{n}"),
+        }
+    }
+}
+
+impl Mods {
+    /// The prefix the cheatsheet puts before a key, if any.
+    #[must_use]
+    pub fn label(self) -> String {
+        let mut parts = Vec::new();
+        if self.ctrl {
+            parts.push("Ctrl");
+        }
+        if self.alt {
+            parts.push("Alt");
+        }
+        if self.shift {
+            parts.push("Shift");
+        }
+        parts.join("+")
+    }
+}
+
 /// One binding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Binding {
@@ -130,6 +177,18 @@ pub struct Binding {
 }
 
 impl Binding {
+    /// How the cheatsheet writes this binding: `Ctrl+F`, `?`, `→`.
+    #[must_use]
+    pub fn label(&self) -> String {
+        let mods = self.mods.label();
+        let key = self.trigger.label();
+        if mods.is_empty() {
+            key
+        } else {
+            format!("{mods}+{key}")
+        }
+    }
+
     #[must_use]
     pub const fn new(trigger: Trigger, mods: Mods, action: Action) -> Self {
         Self {

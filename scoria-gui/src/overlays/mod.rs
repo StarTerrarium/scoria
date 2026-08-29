@@ -15,6 +15,7 @@
 
 pub mod artwork;
 pub mod columns;
+pub mod help;
 pub mod properties;
 pub mod queue;
 pub mod settings;
@@ -44,6 +45,8 @@ pub enum Overlay {
     Columns,
     /// The settings with nowhere else to live (§9.4).
     Settings,
+    /// The `?` cheatsheet (§8), generated from the keymap.
+    Help,
 }
 
 impl Overlay {
@@ -59,6 +62,7 @@ impl Overlay {
             Self::Queue => 0.55,
             Self::Columns => 0.60,
             Self::Settings => 0.72,
+            Self::Help => 0.72,
             // Album art is square and exists to be looked at: the one place
             // §2's "dense over pretty" gives way.
             Self::Artwork(_) => 0.75,
@@ -105,6 +109,7 @@ impl Overlay {
             Self::Properties(_) => "Properties",
             Self::Columns => "Columns and sorting",
             Self::Settings => "Settings",
+            Self::Help => "Keyboard shortcuts",
         }
     }
 }
