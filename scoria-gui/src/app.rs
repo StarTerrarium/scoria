@@ -93,6 +93,8 @@ pub struct App {
     sort_override: Option<(scoria_core::SortField, scoria_core::Direction)>,
     /// The column edge being dragged, if any.
     resizing_column: Option<usize>,
+    /// The heading being dragged to a new position, if any (§7.3).
+    reordering: Option<table::Reorder>,
 
     /// The current query and its result. `rows` is the ordered id list; the
     /// tracks themselves are looked up through the session's index.
@@ -202,6 +204,7 @@ impl App {
             paths: Paths::rooted_at(std::env::temp_dir().join("scoria-unconfigured")),
             sort_override: None,
             resizing_column: None,
+            reordering: None,
             selection: Selection::all(),
             rows: Vec::new(),
             lines: Vec::new(),
@@ -528,6 +531,34 @@ impl App {
                 // hundreds of events and one outcome.
                 self.persist();
             }
+            // A press on a heading. Whether it was a click or the start of a
+            // drag is not known yet -- see `ReorderEnd`.
+            table::Event::ReorderStart(index) => {
+                self.reordering = Some(table::Reorder {
+                    from: index,
+                    to: index,
+                });
+            }
+            table::Event::ReorderTo(fraction) => {
+                if let Some(reorder) = &mut self.reordering {
+                    reorder.to = self.settings.columns.visible_at(fraction);
+                }
+            }
+            table::Event::ReorderEnd => {
+                let Some(reorder) = self.reordering.take() else {
+                    return;
+                };
+                // Let go where it started: that was a click, and a click on a
+                // heading sorts by it. Anything else is a move.
+                if reorder.to == reorder.from {
+                    if let Some(setting) = self.settings.columns.visible().get(reorder.from) {
+                        self.sort_by(setting.column);
+                    }
+                } else {
+                    self.settings.columns.move_visible(reorder.from, reorder.to);
+                    self.persist();
+                }
+            }
         }
     }
 
@@ -724,7 +755,10 @@ impl App {
             | table::Event::HeadingMenu
             | table::Event::ResizeStart(_)
             | table::Event::ResizeTo(_)
-            | table::Event::ResizeEnd => {}
+            | table::Event::ResizeEnd
+            | table::Event::ReorderStart(_)
+            | table::Event::ReorderTo(_)
+            | table::Event::ReorderEnd => {}
         }
         Task::none()
     }
@@ -1332,6 +1366,7 @@ impl App {
             columns: &self.settings.columns,
             sort: self.sort_override,
             resizing: self.resizing_column.is_some(),
+            reordering: self.reordering,
             scroll_offset: self.scroll_offset,
             theme: &self.theme,
             id: TABLE_ID,

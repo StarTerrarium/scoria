@@ -347,6 +347,19 @@ impl Theme {
         }
     }
 
+    /// Where a dragged column will land.
+    ///
+    /// The accent colour and a solid bar: this has to be legible against the
+    /// header for the length of a drag, and it is the only feedback saying the
+    /// drag is doing anything at all.
+    #[must_use]
+    pub fn insertion_style(&self) -> container::Style {
+        container::Style {
+            background: Some(colour(self.roles.accent).into()),
+            ..container::Style::default()
+        }
+    }
+
     /// The grabbable divider between two column headings.
     #[must_use]
     pub fn column_divider_style(&self) -> container::Style {

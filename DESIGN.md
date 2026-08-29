@@ -419,6 +419,12 @@ That panel is one of §9's drawers rather than a floating context menu. §9 is e
 
 The last visible column cannot be hidden: a table with no columns shows nothing and offers no way back, because the header it is configured from would be empty too. This is configuration that tunes a good default: bounded, discoverable, and ignorable. What is banned is an edit mode that lets the application be assembled -- see §2 and `CLAUDE.md` invariant 4 for where that line falls.
 
+**Columns are reordered by dragging a heading**, as well as from the panel. The panel's up-and-down buttons came first and stay: they are the reachable-without-a-drag path, and they are how a column is moved a long way without carrying it.
+
+A press on a heading is not yet a click or a drag, so the sort now happens on *release* and only when the heading is let go where it was picked up. Anything else is a move. That is why the press cannot sort immediately, and it is invisible in use.
+
+While a drag is running, a bar marks where the column would land and the carried heading is accented. The drag is tracked by the same transparent sheet the resize drag uses -- one sheet, since both start from a press on the header and a press cannot be in two places. A press on the sheet ends the drag as well as a release does: a release can be lost, alt-tab takes it away, and the sheet covers the whole table, so without that a lost release would leave the table unresponsive under something invisible.
+
 **Widths are weights, not pixels.** A column sized on one monitor is wrong on the next, exactly as a fixed drawer height was. Dragging an edge takes width from the column to its right rather than reflowing everything, so the columns beyond the one being dragged stay where they are. No column can be dragged away to nothing, because a column with no width cannot be grabbed again.
 
 The layout is repaired when read. A settings file can be older than the application or hand-edited: missing columns are appended and duplicates dropped, so a stale file costs the reader a column rather than costing the application one.

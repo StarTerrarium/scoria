@@ -90,6 +90,8 @@ pub fn view<'a, Message: Clone + 'a>(
         // headings show no sort marker and its edges do not drag.
         sort: None,
         resizing: false,
+        // The queue is a play order, not a view to rearrange.
+        reordering: None,
     };
 
     let mut body = column![table::view(table_view, on_event)]

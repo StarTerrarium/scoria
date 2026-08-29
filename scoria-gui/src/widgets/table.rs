@@ -118,6 +118,15 @@ pub fn centre_offset(line: usize, lines: usize, viewport_height: f32) -> f32 {
 }
 
 /// What the table needs in order to draw itself.
+/// A heading part-way through being dragged somewhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reorder {
+    /// Where it started, among the visible columns.
+    pub from: usize,
+    /// Where it would land if let go now.
+    pub to: usize,
+}
+
 pub struct TableView<'a> {
     pub lines: &'a [Line],
     /// Owned, so the whole view can move into the `responsive` closure -- which
@@ -147,6 +156,8 @@ pub struct TableView<'a> {
     /// Whether a column edge is being dragged, which needs a pointer catcher
     /// over the whole table.
     pub resizing: bool,
+    /// A heading being dragged to a new position, if one is (§7.3).
+    pub reordering: Option<Reorder>,
 }
 
 /// Messages the table produces. Translated by the application into commands;
@@ -161,7 +172,18 @@ pub enum Event {
     /// following playback.
     Context(usize),
     /// A heading was clicked: sort by it (§7.3).
+    ///
+    /// Produced on release rather than on press, because a press might be the
+    /// start of a drag. See [`Event::ReorderStart`].
     SortBy(Column),
+    /// A heading was pressed. Either a click that will sort, or the start of a
+    /// drag that will move the column -- which one it was is known on release.
+    ReorderStart(usize),
+    /// The pointer is at this fraction of the table's width while dragging a
+    /// heading.
+    ReorderTo(f32),
+    /// The heading was let go.
+    ReorderEnd,
     /// A heading was right-clicked: offer the column menu.
     HeadingMenu,
     /// The edge after the `index`th visible column was grabbed.
@@ -188,6 +210,7 @@ pub fn view<'a, Message: Clone + 'a>(
 ) -> Element<'a, Message, Theme> {
     // Read before the view moves into the closure below.
     let resizing = table.resizing;
+    let reordering = table.reordering;
     let header_row = header(&table, &on_event);
 
     // `responsive` hands the closure the space actually available, which is the
@@ -239,24 +262,50 @@ pub fn view<'a, Message: Clone + 'a>(
     });
 
     let table_body = column![header_row, body].width(Fill).height(Fill);
-    if !resizing {
+    if !resizing && reordering.is_none() {
         return table_body.into();
     }
 
     // While dragging, a transparent sheet follows the pointer wherever it goes.
     // Without it the drag stops the moment the cursor leaves a six-pixel gap.
+    //
+    // One sheet for both drags rather than two: only one can be in progress,
+    // since both start from a press on the header and a press cannot be in two
+    // places. Stacking a second sheet would put one of them out of reach.
     let catcher = responsive(move |size| {
         mouse_area(Space::new().width(Fill).height(Fill))
-            .interaction(iced::mouse::Interaction::ResizingHorizontally)
+            .interaction(if resizing {
+                iced::mouse::Interaction::ResizingHorizontally
+            } else {
+                iced::mouse::Interaction::Grabbing
+            })
             .on_move(move |point| {
                 let fraction = if size.width > 0.0 {
                     point.x / size.width
                 } else {
                     0.0
                 };
-                on_event(Event::ResizeTo(fraction))
+                if resizing {
+                    on_event(Event::ResizeTo(fraction))
+                } else {
+                    on_event(Event::ReorderTo(fraction))
+                }
             })
-            .on_release(on_event(Event::ResizeEnd))
+            .on_release(on_event(if resizing {
+                Event::ResizeEnd
+            } else {
+                Event::ReorderEnd
+            }))
+            // The same event on press, as a way out. A release can be lost --
+            // alt-tab mid-drag and it goes to whatever took the focus -- and
+            // this sheet covers the whole table, so a lost release would leave
+            // the table unresponsive under something invisible. One click
+            // recovers it instead of restarting the application.
+            .on_press(on_event(if resizing {
+                Event::ResizeEnd
+            } else {
+                Event::ReorderEnd
+            }))
             .into()
     });
     iced::widget::stack![table_body, catcher]
@@ -283,8 +332,20 @@ fn header<'a, Message: Clone + 'a>(
         .align_y(Alignment::Center)
         .height(Length::Fixed(ROW_HEIGHT));
     let visible = table.columns.visible();
+    let reordering = table.reordering;
 
     for (index, setting) in visible.iter().enumerate() {
+        // Drawn before the column it would push rightwards, and after the one
+        // it would land beyond. This bar is the only thing saying the drag is
+        // doing anything, so it goes in whether or not the pointer is over a
+        // boundary.
+        if let Some(reorder) = reordering
+            && reorder.to == index
+            && reorder.to <= reorder.from
+        {
+            headings = headings.push(insertion_marker(theme));
+        }
+
         let sorted_by = table
             .sort
             .filter(|(field, _)| *field == setting.column.sort_field());
@@ -295,7 +356,14 @@ fn header<'a, Message: Clone + 'a>(
             Some((_, Direction::Descending)) => format!("{} ▼", setting.column.heading()),
             None => setting.column.heading().to_owned(),
         };
-        let colour = if sorted_by.is_some() { accent } else { muted };
+        let dragged = reordering.is_some_and(|r| r.from == index);
+        // The column being carried reads as lifted: accented while it moves, so
+        // it is obvious which one will land.
+        let colour = if dragged || sorted_by.is_some() {
+            accent
+        } else {
+            muted
+        };
 
         headings = headings.push(
             mouse_area(
@@ -306,9 +374,23 @@ fn header<'a, Message: Clone + 'a>(
                     .padding(iced::Padding::from([0.0, 6.0]))
                     .clip(true),
             )
-            .on_press(on_event(Event::SortBy(setting.column)))
+            // Not `SortBy`: a press might be the start of a drag, and which it
+            // was is only known on release.
+            .on_press(on_event(Event::ReorderStart(index)))
+            .interaction(if dragged {
+                iced::mouse::Interaction::Grabbing
+            } else {
+                iced::mouse::Interaction::Grab
+            })
             .on_right_press(on_event(Event::HeadingMenu)),
         );
+
+        if let Some(reorder) = reordering
+            && reorder.to == index
+            && reorder.to > reorder.from
+        {
+            headings = headings.push(insertion_marker(theme));
+        }
 
         // The divider after the last column would have nothing to take width
         // from, so it is not offered.
@@ -337,6 +419,15 @@ fn header<'a, Message: Clone + 'a>(
             left: 0.0,
         })
         .width(Fill)
+        .into()
+}
+
+/// Where a dragged heading would land.
+fn insertion_marker<'a, Message: 'a>(theme: &Theme) -> Element<'a, Message, Theme> {
+    let style = theme.insertion_style();
+    container(Space::new().width(Length::Fixed(2.0)).height(Fill))
+        .height(Fill)
+        .style(move |_t: &Theme| style)
         .into()
 }
 

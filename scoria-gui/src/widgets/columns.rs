@@ -381,6 +381,39 @@ impl ColumnLayout {
         }
     }
 
+    /// Moves the column at visible position `from` to visible position `to`.
+    ///
+    /// Positions are among the *visible* columns, because that is what the
+    /// header shows and what a drag can point at. Hidden columns keep their
+    /// place in the stored order relative to their neighbours, so turning one
+    /// back on puts it back where it was rather than at the end.
+    pub fn move_visible(&mut self, from: usize, to: usize) {
+        let visible: Vec<usize> = self
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.visible)
+            .map(|(i, _)| i)
+            .collect();
+
+        let (Some(&source), Some(&target)) = (visible.get(from), visible.get(to)) else {
+            return;
+        };
+        if source == target {
+            return;
+        }
+
+        let setting = self.columns.remove(source);
+        // Removing shifts everything after it down one, so a rightward move
+        // lands after the target and a leftward move lands on it.
+        let insert_at = if source < target {
+            target
+        } else {
+            target.min(self.columns.len())
+        };
+        self.columns.insert(insert_at, setting);
+    }
+
     pub fn toggle(&mut self, column: Column) {
         let visible = self
             .columns
@@ -450,6 +483,33 @@ impl ColumnLayout {
 
         self.set_weight(dragged.column, new_dragged);
         self.set_weight(neighbour.column, new_neighbour);
+    }
+
+    /// Which visible column sits at `fraction` of the table's width.
+    ///
+    /// The same geometry [`Self::drag_edge`] works in, and for the same reason:
+    /// the header is laid out by weight, so a position in the header is a
+    /// position in the weights. Divider widths are ignored -- a couple of
+    /// pixels either side of a boundary cannot change which column a pointer is
+    /// obviously over.
+    #[must_use]
+    pub fn visible_at(&self, fraction: f32) -> usize {
+        let visible = self.visible();
+        let last = visible.len().saturating_sub(1);
+        let total = self.total_weight();
+        if total == 0 {
+            return 0;
+        }
+
+        let x = fraction.clamp(0.0, 1.0) * total as f32;
+        let mut edge = 0.0_f32;
+        for (index, setting) in visible.iter().enumerate() {
+            edge += f32::from(setting.weight);
+            if x < edge {
+                return index;
+            }
+        }
+        last
     }
 
     fn set_weight(&mut self, column: Column, weight: i64) {
@@ -674,6 +734,104 @@ mod tests {
             .find(|c| c.column == Column::Genre)
             .unwrap();
         assert!(!genre.visible, "the restored column arrived switched on");
+    }
+
+    #[test]
+    fn a_drag_lands_the_column_where_it_was_dropped() {
+        let mut layout = ColumnLayout::default();
+        let before: Vec<_> = layout.visible().iter().map(|c| c.column).collect();
+
+        // Carry the title (position 1) to where the album is (position 4).
+        layout.move_visible(1, 4);
+        let after: Vec<_> = layout.visible().iter().map(|c| c.column).collect();
+
+        assert_eq!(after.get(4), Some(&Column::Title), "{after:?}");
+        assert_eq!(after.len(), before.len(), "a column was lost or gained");
+        for column in &before {
+            assert!(after.contains(column), "{column:?} disappeared");
+        }
+    }
+
+    #[test]
+    fn a_drag_leftwards_lands_on_the_target_rather_than_past_it() {
+        // The two directions need different insertion points, because removing
+        // the column first shifts everything after it down one. Getting this
+        // wrong is off-by-one in one direction only, which is exactly the kind
+        // that survives a casual test.
+        let mut layout = ColumnLayout::default();
+        layout.move_visible(4, 1);
+        let after: Vec<_> = layout.visible().iter().map(|c| c.column).collect();
+        assert_eq!(after.get(1), Some(&Column::Album), "{after:?}");
+    }
+
+    #[test]
+    fn dragging_a_column_onto_itself_changes_nothing() {
+        // This is the click-to-sort case: pressed and released without moving.
+        let mut layout = ColumnLayout::default();
+        let before = layout.visible();
+        layout.move_visible(2, 2);
+        assert_eq!(layout.visible(), before);
+    }
+
+    #[test]
+    fn a_drag_past_the_ends_is_ignored_rather_than_wrapping() {
+        let mut layout = ColumnLayout::default();
+        let before = layout.visible();
+        layout.move_visible(0, 99);
+        layout.move_visible(99, 0);
+        assert_eq!(layout.visible(), before);
+    }
+
+    #[test]
+    fn hidden_columns_keep_their_place_when_a_visible_one_moves() {
+        // Positions in a drag are positions among the *visible* columns, but
+        // the stored order holds every column. A hidden one must not be
+        // dragged along with its neighbour, or turning it back on would put it
+        // somewhere nobody moved it to.
+        let mut layout = ColumnLayout::default();
+        layout.set_visible(Column::Artist, false);
+        let hidden_before = layout.all().iter().position(|c| c.column == Column::Artist);
+
+        layout.move_visible(0, 3);
+
+        let hidden_after = layout.all().iter().position(|c| c.column == Column::Artist);
+        assert!(hidden_before.is_some() && hidden_after.is_some());
+        assert!(
+            !layout.visible().iter().any(|c| c.column == Column::Artist),
+            "a hidden column became visible"
+        );
+    }
+
+    #[test]
+    fn the_pointer_picks_the_column_it_is_over() {
+        // The header is laid out by weight, so a fraction of the width is a
+        // position in the weights -- the same geometry `drag_edge` works in.
+        let layout = ColumnLayout::default();
+        let visible = layout.visible();
+        let total = f32::from(u16::try_from(layout.total_weight()).unwrap_or(u16::MAX));
+
+        let mut edge = 0.0_f32;
+        for (index, setting) in visible.iter().enumerate() {
+            let middle = (edge + f32::from(setting.weight) / 2.0) / total;
+            assert_eq!(
+                layout.visible_at(middle),
+                index,
+                "the middle of {} picked the wrong column",
+                setting.column.name()
+            );
+            edge += f32::from(setting.weight);
+        }
+    }
+
+    #[test]
+    fn a_pointer_beyond_the_table_picks_an_end_rather_than_nothing() {
+        // The catcher sheet follows the pointer off the table, so these arrive.
+        let layout = ColumnLayout::default();
+        let last = layout.visible().len() - 1;
+        assert_eq!(layout.visible_at(-5.0), 0);
+        assert_eq!(layout.visible_at(0.0), 0);
+        assert_eq!(layout.visible_at(1.0), last);
+        assert_eq!(layout.visible_at(5.0), last);
     }
 
     #[test]
