@@ -21,6 +21,14 @@ pub enum CoreError {
     #[error("no such track: {0}")]
     NoSuchTrack(u64),
 
+    /// The track is in the library but its file is not where it was (§7.4).
+    ///
+    /// Distinct from [`Self::NoSuchTrack`] because they need different words:
+    /// one is a stale id, which nobody can act on, and the other is a file
+    /// somebody moved, which they can.
+    #[error("{title}: the file is missing")]
+    FileMissing { title: String },
+
     /// A playback snapshot was asked for a position it does not contain.
     #[error("position {position} is outside a snapshot of {len} tracks")]
     PositionOutOfRange { position: usize, len: usize },

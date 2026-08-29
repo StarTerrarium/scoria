@@ -19,7 +19,9 @@
 
 use crate::theme::{RowState, Theme};
 use crate::widgets::columns::{Column, ColumnLayout};
-use iced::widget::{Space, column, container, mouse_area, responsive, row, scrollable, text};
+use iced::widget::{
+    Space, column, container, mouse_area, responsive, rich_text, row, scrollable, span, text,
+};
 use iced::{Alignment, Element, Fill, Length};
 use scoria_core::id::TrackId;
 use scoria_core::model::Track;
@@ -389,16 +391,35 @@ fn track_row<'a, Message: Clone + 'a>(
         .align_y(Alignment::Center)
         .height(Length::Fixed(ROW_HEIGHT));
     for (index, setting) in visible.iter().enumerate() {
-        // §7.4: a missing file is marked rather than removed, so what will
-        // happen is stated rather than left to be discovered.
-        let value = if setting.column == Column::Title && !track.available {
-            format!("{}  (missing)", track.title)
-        } else {
-            setting.column.value(track)
-        };
+        let value = setting.column.value(track);
+
+        // §7.4: a missing file is struck through rather than removed, so what
+        // will happen to it is stated rather than left to be discovered. The
+        // rule marks the title, which is the cell that is read.
+        //
+        // Struck through rather than labelled: a word costs width in the one
+        // column that needs it most, and would be the first thing clipped. The
+        // dimmed colour says the same thing in a second channel, and asking to
+        // play it says it in words (§11: no signal carried by colour alone).
+        let cell: Element<'a, Message, Theme> =
+            if setting.column == Column::Title && !track.available {
+                // The colour comes from the style the theme already built, so
+                // the conversion to an iced colour still happens in `theme/`
+                // and nowhere else.
+                rich_text([span::<(), iced::Font>(value)
+                    .size(13)
+                    .color_maybe(text_colour.color)
+                    .strikethrough(true)])
+                .into()
+            } else {
+                text(value)
+                    .size(13)
+                    .style(move |_t: &Theme| text_colour)
+                    .into()
+            };
 
         cells = cells.push(
-            container(text(value).size(13).style(move |_t: &Theme| text_colour))
+            container(cell)
                 .width(Length::FillPortion(setting.weight))
                 .padding(iced::Padding::from([0.0, 6.0]))
                 .clip(true),

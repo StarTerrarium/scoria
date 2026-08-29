@@ -3,6 +3,7 @@
 //! This is where §4.3's relative paths become absolute, and it is the only
 //! place that happens on the playback path.
 
+use crate::error::CoreError;
 use crate::id::TrackId;
 use crate::playback::backend::TrackRef;
 use crate::playback::engine::TrackResolver;
@@ -37,15 +38,21 @@ impl IndexResolver {
 }
 
 impl TrackResolver for IndexResolver {
-    fn resolve(&self, id: TrackId) -> Option<TrackRef> {
-        let track = self.index.track(id)?;
-        // Unavailable tracks resolve to nothing, which is what makes §6.4's
+    fn resolve(&self, id: TrackId) -> Result<TrackRef, CoreError> {
+        let track = self
+            .index
+            .track(id)
+            .ok_or_else(|| CoreError::NoSuchTrack(id.get()))?;
+        // Unavailable tracks resolve to an error, which is what makes §6.4's
         // skip-on-advance rule work without the engine knowing about
-        // availability at all.
+        // availability at all. It says which file, because §7.4 keeps the row
+        // visible precisely so someone can go and look for it.
         if !track.available {
-            return None;
+            return Err(CoreError::FileMissing {
+                title: track.title.clone(),
+            });
         }
-        Some(TrackRef {
+        Ok(TrackRef {
             id: track.id,
             path: track.path.to_absolute(&self.root),
             duration: track.duration,

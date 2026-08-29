@@ -42,9 +42,15 @@ const PRELOAD_LEAD: Duration = Duration::from_secs(5);
 /// plays, and §6.1 requires that not to disturb playback. So it holds this, and
 /// the session swaps in a new one when the library changes.
 pub trait TrackResolver: Send + Sync + std::fmt::Debug {
-    /// `None` if the track is unknown or its file no longer resolves, which is
-    /// what makes §6.4's skip rule work.
-    fn resolve(&self, id: TrackId) -> Option<TrackRef>;
+    /// An error if the track is unknown or its file no longer resolves, which
+    /// is what makes §6.4's skip rule work.
+    ///
+    /// A `Result` rather than an `Option` so the reason survives the trip. The
+    /// engine still treats every failure the same way -- report it and move on
+    /// -- and still knows nothing about availability; it just repeats what it
+    /// was told, and "the file is missing" is worth saying where "no such
+    /// track" is not.
+    fn resolve(&self, id: TrackId) -> Result<TrackRef, CoreError>;
 }
 
 /// Messages into the audio thread.
@@ -413,7 +419,7 @@ impl Engine {
         let Some(next) = self.source.peek_next() else {
             return;
         };
-        let Some(next) = self.resolver.resolve(next) else {
+        let Ok(next) = self.resolver.resolve(next) else {
             return;
         };
 
@@ -468,7 +474,7 @@ impl Engine {
             };
 
             match self.resolver.resolve(id) {
-                Some(track) => {
+                Ok(track) => {
                     let gain = self.gain_for(&track);
                     match self.backend.play(&track, gain) {
                         Ok(()) => {
@@ -486,7 +492,7 @@ impl Engine {
                         Err(e) => self.emit(Event::Error(e)),
                     }
                 }
-                None => self.emit(Event::Error(CoreError::NoSuchTrack(id.get()))),
+                Err(e) => self.emit(Event::Error(e)),
             }
 
             // §6.4: on advance, tracks whose files no longer resolve are
@@ -512,7 +518,7 @@ impl Engine {
     }
 
     fn current_ref(&self) -> Option<TrackRef> {
-        self.resolver.resolve(self.source.current()?)
+        self.resolver.resolve(self.source.current()?).ok()
     }
 
     fn set_state(&mut self, state: PlaybackState) {

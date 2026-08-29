@@ -459,7 +459,13 @@ Note also that the header of a group is not generally an album. With the default
 
 ### 7.4 Unavailable tracks
 
-Files that vanish are shown struck through with a marker, not removed. Playback skips them (§6.4). Silently dropping rows makes users doubt the software; a struck-through row states what will happen.
+Files that vanish are shown struck through, not removed. Playback skips them (§6.4). Silently dropping rows makes users doubt the software; a struck-through row states what will happen.
+
+**Three channels, not one.** The title is struck through, the row is dimmed, and asking to play it says "the file is missing" in words. §11's rule that colour alone cannot carry a signal applies here too, and a strikethrough alone is little better -- it is one visual channel and easy to miss on a dense row.
+
+The first version appended "(missing)" to the title instead. That reads clearly but costs width in the one column that needs it most, and it is the first thing an ellipsis eats -- so the marker vanished exactly when the title was long enough to need it.
+
+The words come from the core rather than the frontend: the resolver reports *why* it could not resolve a track, so a vanished file is distinguishable from a stale id. They are not the same problem and they cannot be acted on in the same way -- "no such track: 2" is not something anyone can do anything about, and it was not even true, since the track was still in the library.
 
 ---
 

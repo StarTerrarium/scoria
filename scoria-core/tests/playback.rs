@@ -56,14 +56,16 @@ impl TestResolver {
 }
 
 impl TrackResolver for TestResolver {
-    fn resolve(&self, id: TrackId) -> Option<TrackRef> {
+    fn resolve(&self, id: TrackId) -> Result<TrackRef, scoria_core::error::CoreError> {
         if self
             .missing
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .contains(&id)
         {
-            return None;
+            return Err(scoria_core::error::CoreError::FileMissing {
+                title: format!("track {id:?}"),
+            });
         }
         let replay_gain = self
             .gains
@@ -73,7 +75,7 @@ impl TrackResolver for TestResolver {
             .find(|(t, _)| *t == id)
             .map_or_else(ReplayGain::default, |(_, g)| *g);
 
-        Some(TrackRef {
+        Ok(TrackRef {
             id,
             path: format!("/nowhere/{id}.flac").into(),
             duration: Duration::from_secs(200),
@@ -305,6 +307,30 @@ fn tracks_that_no_longer_resolve_are_skipped() {
 
     rig.finish_and_settle();
     rig.until_played(&[1, 4]);
+}
+
+#[test]
+fn a_skipped_track_says_its_file_is_missing_rather_than_that_it_does_not_exist() {
+    // §7.4 keeps a vanished track visible so someone can go and look for the
+    // file. "no such track: 2" does not help them do that, and it is not even
+    // true -- the track is right there in the library.
+    let rig = Rig::new(TestResolver::with_missing(&[1]));
+    rig.play(&[1, 2]);
+    rig.until_played(&[2]);
+
+    let reported: Vec<_> = rig
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Error(e) => Some(format!("{e}")),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        reported.iter().any(|e| e.contains("the file is missing")),
+        "the skip was reported as {reported:?}"
+    );
 }
 
 #[test]
