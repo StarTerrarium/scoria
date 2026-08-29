@@ -253,6 +253,8 @@ Multiple roots and named libraries are explicitly out of scope. Music spread acr
 - An explicit rescan is always available. Watching cannot see everything -- a network mount, a filesystem that reports no events -- so the manual path is not a convenience.
 - Files that disappear are marked unavailable rather than deleted (§7.4).
 - FLAC is the first-class target for 1.0; broad format support is a pre-1.0-release requirement but comes after the FLAC path works end to end.
+- **Everything the scanner indexes can be played, and that is enforced rather than intended.** `tests/formats.rs` decodes a fixture for every extension in `AUDIO_EXTENSIONS`, so adding one without a decoder behind it fails the build. Indexed: FLAC, MP3, Ogg Vorbis, AAC and Apple Lossless in MP4, raw AAC, WAV and AIFF. Not indexed, because Symphonia 0.5 cannot decode them at all: **Opus**, WavPack, Monkey's Audio, Musepack and WMA. Opus is the one that will be missed, and it is a decoder that does not exist rather than a feature flag left off -- so it waits for Symphonia, or for a decoder crate worth the dependency. `.mp4` is left out while `.m4a` and `.m4b` are in: same container, but a folder of `.mp4` is a video collection.
+- **The extension is a hint, not the answer.** lofty picks its parser from the extension, which loses `.oga` holding Vorbis -- legal, and common -- along with anything a converter renamed without re-encoding. The extension is tried first because it is right almost always and costs nothing; the file's own header is consulted when that fails.
 
 Tag reading uses `lofty` rather than Symphonia's metadata layer, because tag *writing* is wanted later (§9.3) and lofty covers both.
 

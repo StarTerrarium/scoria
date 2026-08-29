@@ -20,12 +20,21 @@ use std::time::Duration;
 
 /// File extensions the scanner considers audio.
 ///
-/// FLAC is the first-class target for 1.0 (§5.2); the rest are indexed so that
-/// broad format support before release is a playback problem rather than a
-/// rescan.
+/// **Everything here can actually be played**, which is the rule this list is
+/// kept to. `tests/formats.rs` decodes a fixture for every entry, so adding one
+/// without a decoder behind it fails rather than producing a library full of
+/// tracks that stop the moment they are asked to play.
+///
+/// That rule cost the list four entries. Symphonia 0.5 has no Opus decoder at
+/// all, and none for WavPack, Monkey's Audio, Musepack or WMA (§5.2). Indexing
+/// them anyway would have been a promise the player cannot keep.
+///
+/// `.mp4` is deliberately absent while `.m4a` and `.m4b` are here: the
+/// container is the same, but a folder of `.mp4` files is a video collection,
+/// and pulling those into a music library is worse than missing the rare
+/// audio-only one.
 pub const AUDIO_EXTENSIONS: &[&str] = &[
-    "flac", "mp3", "ogg", "oga", "opus", "m4a", "m4b", "mp4", "aac", "wav", "wave", "aiff", "aif",
-    "wv", "ape", "mpc", "wma",
+    "flac", "mp3", "ogg", "oga", "m4a", "m4b", "aac", "wav", "wave", "aiff", "aif",
 ];
 
 /// Whether a path looks like something worth reading tags from.
@@ -56,6 +65,34 @@ pub struct TrackTags {
     pub has_embedded_artwork: bool,
 }
 
+/// Opens a file for reading tags, by extension and then by content.
+///
+/// lofty decides how to parse a file from its extension alone, which is right
+/// almost always and wrong in the cases that matter: `.oga` holding Vorbis
+/// rather than Ogg FLAC, or anything a converter renamed without re-encoding.
+/// A library that has been carried between machines for twenty years has these
+/// in it, and losing a track to a wrong extension is worse than the extra read.
+///
+/// So the extension is tried first, because it is right almost always and costs
+/// nothing, and the file's own header is consulted only when that fails.
+fn open(path: &Path) -> Result<lofty::file::TaggedFile, CoreError> {
+    let by_extension = lofty::probe::Probe::open(path).and_then(lofty::probe::Probe::read);
+    let Err(extension_error) = by_extension else {
+        return by_extension
+            .map_err(|e| CoreError::CorruptData(format!("{}: {e}", path.display())));
+    };
+
+    lofty::probe::Probe::open(path)
+        .map_err(|e| CoreError::CorruptData(format!("{}: {e}", path.display())))?
+        .guess_file_type()
+        .map_err(|e| CoreError::CorruptData(format!("{}: {e}", path.display())))?
+        .read()
+        // The first failure is the one worth reporting: sniffing is the
+        // fallback, and its error would say only that the header made no sense
+        // either.
+        .map_err(|_| CoreError::CorruptData(format!("{}: {extension_error}", path.display())))
+}
+
 /// Reads tags from a file.
 ///
 /// # Errors
@@ -63,8 +100,7 @@ pub struct TrackTags {
 /// [`CoreError::CorruptData`] if the file cannot be parsed as audio at all.
 /// Individual unreadable fields are absent rather than fatal.
 pub fn read(path: &Path) -> Result<TrackTags, CoreError> {
-    let file = lofty::read_from_path(path)
-        .map_err(|e| CoreError::CorruptData(format!("{}: {e}", path.display())))?;
+    let file = open(path)?;
 
     let duration = file.properties().duration();
     // The primary tag is the format's native one; a file with only a foreign
@@ -109,8 +145,7 @@ pub fn read(path: &Path) -> Result<TrackTags, CoreError> {
 ///
 /// [`CoreError::CorruptData`] if the file cannot be parsed as audio.
 pub fn read_all(path: &Path) -> Result<Vec<(String, String)>, CoreError> {
-    let file = lofty::read_from_path(path)
-        .map_err(|e| CoreError::CorruptData(format!("{}: {e}", path.display())))?;
+    let file = open(path)?;
 
     let Some(tag) = file.primary_tag().or_else(|| file.first_tag()) else {
         return Ok(Vec::new());
@@ -209,7 +244,7 @@ mod tests {
 
     #[test]
     fn recognises_audio_by_extension_regardless_of_case() {
-        for name in ["a.flac", "a.FLAC", "a.Mp3", "a.opus", "a.m4a"] {
+        for name in ["a.flac", "a.FLAC", "a.Mp3", "a.AIFF", "a.m4a"] {
             assert!(
                 is_audio_file(&PathBuf::from(name)),
                 "{name} should be audio"
@@ -219,7 +254,18 @@ mod tests {
 
     #[test]
     fn ignores_everything_else() {
-        for name in ["cover.jpg", "notes.txt", "album", "a.flac.bak", ".hidden"] {
+        // `.opus` and `.mp4` are here on purpose. Opus has no decoder in
+        // Symphonia 0.5, and `.mp4` is a video collection far more often than
+        // an audio one -- see `AUDIO_EXTENSIONS`.
+        for name in [
+            "cover.jpg",
+            "notes.txt",
+            "album",
+            "a.flac.bak",
+            ".hidden",
+            "a.opus",
+            "a.mp4",
+        ] {
             assert!(
                 !is_audio_file(&PathBuf::from(name)),
                 "{name} should not be audio"

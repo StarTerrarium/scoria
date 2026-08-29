@@ -31,7 +31,14 @@ iced = { version = "0.14", features = ["tokio", "image-without-codecs"] }
 # exact sample counts. When it is added it MUST stay on the version rodio resolves
 # to -- rodio 0.22 pulls symphonia 0.5, and mismatching it links two copies of the
 # decoder into the binary.
-rodio = "0.22"
+rodio = { version = "0.22", features = [
+    # Beyond rodio's defaults (FLAC, MP3, MP4/AAC, Vorbis, WAV). Symphonia 0.5
+    # decodes these and a library plausibly contains them; everything it cannot
+    # decode is listed in DESIGN.md §5.2 and is not indexed.
+    "symphonia-aiff",
+    "symphonia-alac",
+    "symphonia-adpcm",
+] }
 symphonia = "0.5"
 
 # Library and storage.
