@@ -41,6 +41,20 @@ impl BrowserPlacement {
         }
     }
 
+    /// The one-word form, for a button in a row of three.
+    ///
+    /// Words rather than glyphs, as elsewhere in the header: a glyph a font
+    /// does not have renders as a box, and these three have no established
+    /// symbols to borrow.
+    #[must_use]
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Top => "Top",
+            Self::Left => "Left",
+        }
+    }
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -221,6 +235,23 @@ mod tests {
 
         let unique: std::collections::HashSet<_> = seen.into_iter().collect();
         assert_eq!(unique.len(), 3, "cycling skipped a placement");
+    }
+
+    #[test]
+    fn every_placement_has_a_distinct_button_label() {
+        // Three buttons side by side in the header (§8). Two sharing a label
+        // would make one of them unreachable in practice, and the mistake is a
+        // copy-paste away.
+        let labels: std::collections::HashSet<_> = [
+            BrowserPlacement::Off,
+            BrowserPlacement::Top,
+            BrowserPlacement::Left,
+        ]
+        .into_iter()
+        .map(BrowserPlacement::short_label)
+        .collect();
+        assert_eq!(labels.len(), 3, "two placements share a label");
+        assert!(!labels.iter().any(|l| l.is_empty()));
     }
 
     #[test]

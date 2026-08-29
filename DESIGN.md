@@ -527,7 +527,9 @@ Tooltips only solve discovery for mouse users, and this is a keyboard-navigable 
 
 **The cheatsheet is generated from the keymap, not written out.** §10 already makes the keymap a data structure, and that is what makes this possible: a binding that changes changes the list, and one that is removed disappears from it. A hand-written list of shortcuts is wrong the first time anyone edits the keymap and stays wrong until someone notices. Actions carry the heading they belong under, so a new action fails to compile until it has a home -- a list kept in the overlay would simply leave it out, silently. And by its own rule the cheatsheet has a button too: it opens from **Shortcuts** in the header as well as from `?`.
 
-**Everything reachable by a keybinding is also reachable without one.** The keyboard is the fast path for someone who knows it, never the only path: a feature whose sole entry point is a shortcut you have not been told about is a feature nobody finds. The queue, the column panel and the settings drawer all have visible controls as well as keys.
+**Everything reachable by a keybinding is also reachable without one.** The keyboard is the fast path for someone who knows it, never the only path: a feature whose sole entry point is a shortcut you have not been told about is a feature nobody finds. The queue, the column panel, the settings drawer, the cheatsheet and the browser placement all have visible controls as well as keys.
+
+Where the two differ is in *shape*, not in reach. A key cycles the browser placement, because cycling is what one keystroke does well; the header shows all three placements as buttons, because a pointer should go straight to the one it wants rather than clicking twice to pass through the one it does not. The buttons also state which placement is current, which the keystroke never could.
 
 ---
 

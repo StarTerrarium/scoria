@@ -61,6 +61,8 @@ pub enum Message {
     Columns(overlays::columns::Event),
     Settings(overlays::settings::Event),
     Welcome(welcome::Event),
+    /// Put the browser here (§7.1).
+    SetPlacement(BrowserPlacement),
     /// The folder picker finished. `None` means it was cancelled.
     RootChosen(Option<std::path::PathBuf>),
     CloseOverlay,
@@ -381,6 +383,7 @@ impl App {
             Message::Columns(event) => self.on_columns(event),
             Message::Settings(event) => return self.on_settings(event),
             Message::Welcome(event) => return self.on_welcome(event),
+            Message::SetPlacement(placement) => self.set_placement(placement),
             Message::RootChosen(root) => self.set_root(root),
             Message::CloseOverlay => self.set_overlay(None),
             Message::ArtistPane(event) => self.on_artist_pane(event),
@@ -658,6 +661,14 @@ impl App {
             }
             Err(e) => self.status = format!("{e}"),
         }
+    }
+
+    /// Puts the browser somewhere (§7.1).
+    fn set_placement(&mut self, placement: BrowserPlacement) {
+        self.placement = placement;
+        // `persist` copies the placement across itself, so there is one place
+        // that knows how a placement reaches the settings file.
+        self.persist();
     }
 
     /// Column visibility, order, and the sort preset (§7.3).
@@ -1103,9 +1114,10 @@ impl App {
                 None => {}
             },
             Action::CycleLayout => {
-                self.placement = self.placement.cycle();
+                self.set_placement(self.placement.cycle());
+                // Said in words for the keyboard path only. The buttons show
+                // which placement is current, so a click needs no commentary.
                 self.status = self.placement.label().to_owned();
-                self.persist();
             }
             Action::FocusSearch => {
                 return iced::widget::operation::focus(iced::widget::Id::new(SEARCH_ID));
@@ -1420,6 +1432,27 @@ impl App {
         // Pushed to the right so the buttons sit where chrome is looked for,
         // and so the chip stays beside the text it qualifies.
         header = header.push(iced::widget::Space::new().width(Fill));
+
+        // Where the browser sits (§7.1). Three buttons rather than one that
+        // cycles: a mouse should point at the layout it wants rather than
+        // clicking twice to pass through the one it does not, and three
+        // buttons say what the alternatives are, which a cycling key never
+        // could. The keystroke stays a cycle, because that is what a keystroke
+        // is good at.
+        header = header.push(text("Browser").size(11).style(move |_t: &Theme| muted));
+        for placement in [
+            BrowserPlacement::Off,
+            BrowserPlacement::Top,
+            BrowserPlacement::Left,
+        ] {
+            let current = placement == self.placement;
+            header = header.push(
+                button(text(placement.short_label()).size(12))
+                    .padding([3, 8])
+                    .on_press(Message::SetPlacement(placement))
+                    .style(move |t: &Theme, status| t.transport_button(status, current)),
+            );
+        }
 
         // Both of these have keybindings, and a keybinding is not a way in for
         // anyone who has not been told about it. Words rather than glyphs:
