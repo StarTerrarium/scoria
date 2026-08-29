@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Scoria
+GenericName=Music Player
+Comment=A library-centric music player
+Exec=scoria
+Icon=scoria
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=music;audio;player;library;album;flac;
+StartupNotify=true
+# Matches the application id the window sets, which is how the desktop pairs a
+# running window with this entry -- and therefore with the icon.
+StartupWMClass=scoria
+# Deliberately no MimeType. Scoria takes commands, not file paths, so offering
+# it in "Open with" would advertise something it cannot do.

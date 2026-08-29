@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Scoria</title>
+  <!-- Scoria is porous volcanic rock: dark, light for its size, full of holes.
+       A faceted chunk with a few pores still glowing. The shape has to read at
+       22px in a panel as well as at 128px in a launcher, so there are five
+       pores rather than a convincing number, and no texture at all. -->
+  <defs>
+    <linearGradient id="rock" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#514b58"/>
+      <stop offset="1" stop-color="#201d24"/>
+    </linearGradient>
+    <radialGradient id="ember" cx="0.5" cy="0.6" r="0.5">
+      <stop offset="0" stop-color="#ff9d3c" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#e2622a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Heat around the chunk, kept well inside the canvas so it does not read
+       as a smear where the icon is cropped. -->
+  <circle cx="64" cy="66" r="52" fill="url(#ember)"/>
+
+  <!-- Not a circle: a rock has facets. -->
+  <path d="M64 10 L102 28 L118 64 L98 104 L58 118 L20 96 L10 54 Z"
+        fill="url(#rock)" stroke="#6b6577" stroke-width="3" stroke-linejoin="round"/>
+
+  <!-- Pores. The one feature that makes it scoria rather than a stone. -->
+  <g fill="#15131a">
+    <circle cx="47" cy="41" r="9"/>
+    <circle cx="82" cy="57" r="13"/>
+    <circle cx="38" cy="76" r="7"/>
+    <circle cx="66" cy="94" r="7"/>
+    <circle cx="98" cy="84" r="5"/>
+  </g>
+  <!-- Still glowing. Two, so it is an accent rather than a pattern. -->
+  <g fill="#ff9d3c">
+    <circle cx="82" cy="57" r="6"/>
+    <circle cx="38" cy="76" r="3"/>
+  </g>
+</svg>

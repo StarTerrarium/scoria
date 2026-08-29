@@ -10,9 +10,39 @@ configuration.
 It is aimed at someone with a well-organised local library who listens to whole
 albums and wants to see a lot of information at once.
 
-> **Status: early development.** The core works -- scanning, querying, gapless
-> playback -- and is driven from a command line. There is no graphical frontend
-> yet.
+> **Status: approaching 1.0.** The player works: scanning and watching, three
+> layouts, gapless playback, shuffle and repeat, ReplayGain, artwork, the queue,
+> search and filtering, settings, and the desktop's media keys. What is left
+> before 1.0 is packaging and documentation, not features.
+
+## What it does
+
+- **Browses a library, not a playlist.** Filter panes cascade album artist to
+  album to tracks; the table is the same table in all three layouts.
+- **Playback is a snapshot.** What plays is a materialised list of tracks.
+  Re-sorting, filtering or searching never disturbs it.
+- **Gapless.** The next track is decoded before the current one drains, so
+  albums that were mastered to run together do.
+- **ReplayGain**, read from tags -- album gain in album order, track gain when
+  shuffled. Never computed, never guessed; untagged tracks play at 0 dB.
+- **Watches the library.** Files added or removed are picked up without asking,
+  and an explicit rescan is always available.
+- **Media keys**, `playerctl`, and whatever your desktop shows in its own panel,
+  over MPRIS -- from the graphical player and from `scoria play` alike.
+- **Mouse first, keyboard fast.** Everything reachable by a keybinding is
+  reachable without one. `?` lists the bindings, generated from the keymap so it
+  cannot drift.
+
+## Formats
+
+FLAC, MP3, Ogg Vorbis, AAC and Apple Lossless in MP4, raw AAC, WAV and AIFF.
+
+Everything the scanner indexes can be played, and the test suite enforces it:
+there is a decoding fixture for every extension the library accepts, so a format
+cannot be listed without a decoder behind it. **Opus is not supported** --
+Symphonia has no Opus decoder -- and neither are WavPack, Monkey's Audio,
+Musepack or WMA. Files in those formats are not indexed rather than indexed and
+silently unplayable.
 
 ## Design
 
@@ -72,13 +102,29 @@ workspace-wide rather than discouraged, and `scripts/check-boundaries.sh` flags
 any local `allow` that reopens one outside a test module. Errors are returned and
 surfaced through the event stream instead.
 
-## Trying it
+## Installing
 
 ```sh
-cargo build --release
-./target/release/scoria scan ~/Music
-./target/release/scoria artists
-./target/release/scoria play "sleep token"
+just install          # the binary into ~/.cargo/bin, plus the desktop entry
+just desktop-install  # only the desktop entry and icon
+just uninstall        # both, leaving settings and the database alone
+```
+
+Everything goes under your home directory; nothing is written system-wide. The
+desktop entry is what gives the running window its icon and puts Scoria in the
+application menu.
+
+## Trying it
+
+`scoria` with no arguments opens the player. The first run asks for your music
+folder.
+
+The same binary drives the library from the terminal:
+
+```sh
+scoria scan ~/Music
+scoria artists
+scoria play "sleep token"
 ```
 
 `scoria help` lists the rest. The command line drives the same `Command`/`Event`

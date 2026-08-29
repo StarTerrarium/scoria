@@ -617,6 +617,10 @@ Themes are defined as serialisable data even while compiled in, so user themes l
 | Watching | notify | |
 | MPRIS | souvlaki 0.8 | Media keys, playerctl, desktop controls. Lives in the core: a headless session should still answer a media key, and the TUI should not have to reimplement it. souvlaki is not a UI crate, so invariant 1 is untouched |
 
+**The desktop pairs the window with the application entry by id.** `scoria.desktop` carries `StartupWMClass=scoria` and the window sets the same application id, which is what makes the desktop show Scoria's icon rather than its placeholder. The icon is also embedded in the binary, because the desktop entry is not installed during development and a window with no icon at all is worse. souvlaki 0.8 does not publish MPRIS's `DesktopEntry` property, so a desktop panel showing what is playing uses its own generic icon; that is upstream, and not worth a fork.
+
+The entry deliberately declares no `MimeType`. Scoria takes commands, not file paths, so offering it in "Open with" would advertise something it cannot do.
+
 **Letting go of the media controls is deliberately not waited for.** souvlaki's `Drop` tells its D-Bus service thread to stop and then joins it, and that thread finishes whatever it had queued first -- roughly a second per property change still in flight. On the way out that is a window that stays on screen after it has been closed: measured at 740-800ms with the controls attached, against 11-15ms without them. So the controls are handed to a thread that drops them, and nothing waits for it. Nothing is skipped -- the service thread still stops and the bus name is still released -- it just happens off the path between clicking the close button and the window going. If the process exits first, the kernel closes the connection, which releases the name anyway.
 
 The same measurement is what rules out the alternatives. It is not the scan thread: the shutdown is the same length with watching turned off, because that handle stops in about 30ms. And it is not the renderer, because without the media controls the whole teardown is 15ms.

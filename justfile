@@ -72,8 +72,31 @@ release:
     cargo build --workspace --release
 
 # Install the binary into ~/.cargo/bin.
-install:
+install: && desktop-install
     cargo install --path scoria-cli --locked
+
+# Per-user, under XDG_DATA_HOME. Nothing is written outside the home directory.
+
+# Install the desktop entry and icon, so Scoria appears in the application menu.
+desktop-install:
+    #!/usr/bin/env bash
+    data="${XDG_DATA_HOME:-$HOME/.local/share}"
+    install -Dm644 packaging/scoria.desktop "$data/applications/scoria.desktop"
+    install -Dm644 packaging/scoria.svg "$data/icons/hicolor/scalable/apps/scoria.svg"
+    install -Dm644 packaging/scoria.png "$data/icons/hicolor/256x256/apps/scoria.png"
+    command -v update-desktop-database >/dev/null && update-desktop-database -q "$data/applications" || true
+    command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -qtf "$data/icons/hicolor" || true
+    echo "installed to $data -- Scoria should appear in the application menu"
+
+# Remove the desktop entry, icon, and the binary.
+uninstall:
+    #!/usr/bin/env bash
+    data="${XDG_DATA_HOME:-$HOME/.local/share}"
+    rm -f "$data/applications/scoria.desktop" \
+          "$data/icons/hicolor/scalable/apps/scoria.svg" \
+          "$data/icons/hicolor/256x256/apps/scoria.png"
+    cargo uninstall scoria-cli 2>/dev/null || true
+    echo "removed. Settings and the library database are left alone -- see just clean-all"
 
 # --------------------------------------------------------------- inspecting --
 

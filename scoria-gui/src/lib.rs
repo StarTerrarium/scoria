@@ -33,9 +33,42 @@ pub fn run() -> Result<()> {
         .title(app::App::title)
         .theme(app::App::theme)
         .subscription(app::App::subscription)
-        .window_size((1200.0, 760.0))
+        .window(window_settings())
         .run()?;
     Ok(())
+}
+
+/// How the window introduces itself to the desktop.
+///
+/// The application id is the pairing between a running window and the
+/// `scoria.desktop` entry, and therefore the icon: without it a Wayland
+/// compositor has nothing to match on and shows its placeholder. The embedded
+/// icon covers the case where the desktop entry is not installed at all, which
+/// is every `cargo run`.
+fn window_settings() -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(1200.0, 760.0),
+        icon: icon(),
+        #[cfg(target_os = "linux")]
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: "scoria".to_owned(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// The window icon, decoded from the same source the packaging installs.
+///
+/// `None` rather than a failure: a window with the desktop's placeholder icon
+/// is a cosmetic problem, and refusing to open over one would not be.
+fn icon() -> Option<iced::window::Icon> {
+    const ICON: &[u8] = include_bytes!("../../packaging/scoria.png");
+
+    let decoded = image::load_from_memory_with_format(ICON, image::ImageFormat::Png).ok()?;
+    let rgba = decoded.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    iced::window::icon::from_rgba(rgba.into_raw(), width, height).ok()
 }
 
 /// iced calls this to build the initial state.
