@@ -521,6 +521,8 @@ Position is reported whenever it moves, not once per second. A seek bar moves co
 
 Shuffle and repeat sit past the seek bar rather than among the transport buttons: they change what happens next, which is a different kind of thing from moving through what is playing now.
 
+The volume bar takes the mouse wheel while the pointer is over it, a twentieth of the range per notch. Dragging still works: the wheel handler wraps the slider and only sees events the slider ignored. It clamps rather than wrapping, because a wheel that rolled past full and started again at silence would be a genuinely unpleasant surprise on a control people spin.
+
 Symbol buttons only, with hover tooltips. Glyphs have to be ones a system font actually has -- the first attempt used U+2928 for shuffle, which is neither a shuffle symbol nor present in the default font, and rendered as a cross. Jump-to-playing uses a crosshair/target glyph, matching the "reveal current item" convention from editors and file managers.
 
 Tooltips only solve discovery for mouse users, and this is a keyboard-navigable application. A keybinding cheatsheet on `?` covers the other path.

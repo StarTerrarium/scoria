@@ -10,12 +10,40 @@
 
 use crate::theme::Theme;
 use crate::widgets::format_duration;
-use iced::widget::{Space, button, column, container, row, slider, text, tooltip};
+use iced::widget::{Space, button, column, container, mouse_area, row, slider, text, tooltip};
 use iced::{Alignment, Element, Fill, Length};
 use scoria_core::event::PlaybackState;
 use scoria_core::model::Track;
 use scoria_core::playback::RepeatMode;
 use std::time::Duration;
+
+/// How much one notch of the wheel moves the volume.
+///
+/// A twentieth of the range: twenty notches from silent to full is enough to
+/// land on a particular loudness without spinning, and coarse enough that one
+/// notch is worth doing.
+const VOLUME_STEP: f32 = 0.05;
+
+/// Roughly one wheel notch, in pixels.
+///
+/// Trackpads report scrolling in pixels rather than in lines, and there is no
+/// authoritative conversion -- this is the conventional approximation. Getting
+/// it wrong makes a trackpad faster or slower than a wheel, not broken.
+const PIXELS_PER_NOTCH: f32 = 50.0;
+
+/// The volume after a scroll over the bar.
+///
+/// Up is louder, which is the only arrangement anyone expects.
+#[must_use]
+fn scrolled_volume(current: f32, delta: iced::mouse::ScrollDelta) -> f32 {
+    let notches = match delta {
+        iced::mouse::ScrollDelta::Lines { y, .. } => y,
+        iced::mouse::ScrollDelta::Pixels { y, .. } => y / PIXELS_PER_NOTCH,
+    };
+    // Clamped rather than wrapped: a wheel that rolls past full and starts
+    // again at silence would be a very unpleasant surprise.
+    (current + notches * VOLUME_STEP).clamp(0.0, 1.0)
+}
 
 /// What the bar shows.
 pub struct TransportView<'a> {
@@ -65,6 +93,8 @@ pub fn view<'a, Message: Clone + 'a>(
     on_event: impl Fn(Event) -> Message + Copy + 'a,
 ) -> Element<'a, Message, Theme> {
     let theme = transport.theme;
+    // Copied out before the closures below, which outlive the borrow.
+    let volume = transport.volume;
 
     let symbol = move |glyph: &'static str, hint: &'static str, event: Event, active: bool| {
         let control = button(text(glyph).size(15))
@@ -192,11 +222,18 @@ pub fn view<'a, Message: Clone + 'a>(
         // The queue needs a way in that does not require knowing a keybinding.
         // §10 makes the keyboard a complete path, not the only one.
         symbol("≡", "Queue", Event::ToggleQueue, transport.queue_open),
-        slider(0.0..=1.0, transport.volume, move |v| on_event(
-            Event::SetVolume(v)
-        ))
-        .step(0.01)
-        .width(Length::Fixed(90.0)),
+        // The wheel changes the volume while the pointer is over the bar,
+        // which is where a hand already is when it wants to. `mouse_area`
+        // hands the event to the slider first and only sees what the slider
+        // ignored, so dragging still works exactly as it did.
+        mouse_area(
+            slider(0.0..=1.0, transport.volume, move |v| on_event(
+                Event::SetVolume(v)
+            ))
+            .step(0.01)
+            .width(Length::Fixed(90.0)),
+        )
+        .on_scroll(move |delta| on_event(Event::SetVolume(scrolled_volume(volume, delta)))),
     ]
     .spacing(8)
     .padding([6, 10])
@@ -207,4 +244,72 @@ pub fn view<'a, Message: Clone + 'a>(
         .width(Fill)
         .style(move |_t: &Theme| style)
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::float_cmp)]
+
+    use super::*;
+    use iced::mouse::ScrollDelta;
+
+    fn lines(y: f32) -> ScrollDelta {
+        ScrollDelta::Lines { x: 0.0, y }
+    }
+
+    #[test]
+    fn up_is_louder_and_down_is_quieter() {
+        assert_eq!(scrolled_volume(0.5, lines(1.0)), 0.55);
+        assert_eq!(scrolled_volume(0.5, lines(-1.0)), 0.45);
+    }
+
+    #[test]
+    fn the_wheel_stops_at_the_ends_rather_than_wrapping() {
+        // A wheel that rolled past full and started again at silence would be
+        // a very unpleasant surprise, and this is a control people spin.
+        assert_eq!(scrolled_volume(1.0, lines(1.0)), 1.0);
+        assert_eq!(scrolled_volume(0.0, lines(-1.0)), 0.0);
+        assert_eq!(scrolled_volume(0.98, lines(5.0)), 1.0);
+        assert_eq!(scrolled_volume(0.02, lines(-5.0)), 0.0);
+    }
+
+    #[test]
+    fn a_trackpad_moves_it_too() {
+        // Trackpads report pixels rather than lines. The conversion is an
+        // approximation; what matters is that it moves in the right direction
+        // and by a comparable amount.
+        let notch = ScrollDelta::Pixels {
+            x: 0.0,
+            y: PIXELS_PER_NOTCH,
+        };
+        assert_eq!(scrolled_volume(0.5, notch), 0.55);
+
+        let nudge = ScrollDelta::Pixels { x: 0.0, y: 5.0 };
+        let after = scrolled_volume(0.5, nudge);
+        assert!(
+            after > 0.5 && after < 0.55,
+            "a small nudge moved it {after}"
+        );
+    }
+
+    #[test]
+    fn a_sideways_scroll_leaves_the_volume_alone() {
+        // Horizontal scrolling is a real thing on trackpads and tilt wheels,
+        // and it is not asking for anything here.
+        assert_eq!(
+            scrolled_volume(0.5, ScrollDelta::Lines { x: 3.0, y: 0.0 }),
+            0.5
+        );
+    }
+
+    #[test]
+    fn twenty_notches_cross_the_whole_range() {
+        // Enough to land on a particular loudness without spinning, coarse
+        // enough that one notch is worth doing.
+        let mut volume = 0.0;
+        for _ in 0..20 {
+            volume = scrolled_volume(volume, lines(1.0));
+        }
+        assert_eq!(volume, 1.0);
+    }
 }
