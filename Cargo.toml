@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["scoria-core", "scoria-cli", "scoria-gui"]
+members = ["scoria-core", "scoria-bin", "scoria-gui"]
 
 [workspace.package]
 version = "0.1.0"

@@ -137,7 +137,7 @@ exists first, so there is no way for UI code to reach past it.
 |---|---|
 | `scoria-core` | Library index, scanner, query engine, playback engine. Depends on no UI crate. |
 | `scoria-gui` | iced frontend. |
-| `scoria-cli` | Binary; also drives the core directly for debugging. |
+| `scoria-bin` | The `scoria` binary: picks a frontend, and drives the core directly for debugging. The only crate that builds an executable. |
 
 `scoria-core` talks to frontends by receiving `Command` and emitting `Event`, both
 serialisable. The frontend never calls into core internals. This is enforced by

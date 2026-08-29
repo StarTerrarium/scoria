@@ -54,7 +54,7 @@ What that bans is an *edit mode*: deciding which components exist, what goes in 
 scoria-core/     library index, scanner, query engine, playback engine, queue
 scoria-gui/      iced frontend
 scoria-tui/      ratatui frontend (post-1.0)
-scoria-cli/      thin binary, selects frontend
+scoria-bin/      thin binary, selects frontend
 ```
 
 `scoria-core` has no dependency on any UI crate. This is enforced by the dependency graph, not by convention.

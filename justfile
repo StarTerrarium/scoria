@@ -73,7 +73,7 @@ release:
 
 # Install the binary into ~/.cargo/bin.
 install: && desktop-install
-    cargo install --path scoria-cli --locked
+    cargo install --path scoria-bin --locked
 
 # Per-user, under XDG_DATA_HOME. Nothing is written outside the home directory.
 
@@ -95,7 +95,7 @@ uninstall:
     rm -f "$data/applications/scoria.desktop" \
           "$data/icons/hicolor/scalable/apps/scoria.svg" \
           "$data/icons/hicolor/256x256/apps/scoria.png"
-    cargo uninstall scoria-cli 2>/dev/null || true
+    cargo uninstall scoria-bin 2>/dev/null || true
     echo "removed. Settings and the library database are left alone -- see just clean-all"
 
 # --------------------------------------------------------------- inspecting --
@@ -154,7 +154,7 @@ outdated:
     cargo outdated --workspace --root-deps-only
 
 # ----------------------------------------------------------------- library --
-# These become useful at M6, when scoria-cli can drive the core.
+# These become useful at M6, when the binary can drive the core.
 
 # Scan a library root into the database.
 scan dir=library:

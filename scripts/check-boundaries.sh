@@ -77,7 +77,7 @@ fi
 
 # Conventions: raw SQL belongs to the repository layer.
 sql=$(grep -rlE '"[[:space:]]*(SELECT|INSERT|UPDATE|DELETE|CREATE)[[:space:]]' \
-  scoria-core/src scoria-gui/src scoria-cli/src 2>/dev/null \
+  scoria-core/src scoria-gui/src scoria-bin/src 2>/dev/null \
   | grep -v '^scoria-core/src/db/' | sort)
 if [ -n "$sql" ]; then
   fail "raw SQL outside scoria-core/src/db/:"

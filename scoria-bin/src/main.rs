@@ -1,10 +1,18 @@
-//! Scoria's command line.
+//! The `scoria` binary.
 //!
-//! This drives `scoria-core` through the same `Command`/`Event` seam the
-//! graphical frontend will use, and nothing else. That is deliberate: the seam
-//! stays honest because something already uses it, and because this exists
-//! before any UI does, invariant 2 cannot be violated by code that has nowhere
-//! to violate it from.
+//! **This is the only crate in the workspace that builds an executable**, and
+//! what it is for is choosing a frontend: `scoria` with no arguments opens the
+//! window, and everything else runs here. `scoria-gui` is a library so that
+//! nothing about launching a window shares a crate with the widgets, and so
+//! that `scoria-tui` can arrive beside it as another library this binary picks
+//! between. Frontend selection has to live somewhere that depends on every
+//! frontend; this is that somewhere.
+//!
+//! The command line itself drives `scoria-core` through the same
+//! `Command`/`Event` seam the graphical frontend uses, and nothing else. That
+//! is deliberate: the seam stays honest because something already uses it, and
+//! because this existed before any UI did, invariant 2 could not be violated by
+//! code that had nowhere to violate it from.
 //!
 //! It is also permanently useful. Scanning a library, checking what the sort
 //! order actually produces, and confirming playback works are all things worth

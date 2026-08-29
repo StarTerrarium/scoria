@@ -123,7 +123,7 @@ scoria-gui/
       transport.rs
     layouts/     arrangement only, no widget definitions
     overlays/
-scoria-cli/      the `scoria` binary
+scoria-bin/      the `scoria` binary: picks a frontend, and is the only crate that builds one
 scripts/         check-boundaries.sh
 
 scoria-tui/ arrives post-1.0. It is deliberately not an empty crate until then.
