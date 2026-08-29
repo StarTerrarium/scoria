@@ -48,13 +48,15 @@ pub enum Column {
     Bitrate,
     SampleRate,
     BitDepth,
+    /// How many times it has been played (§6.8).
+    PlayCount,
     /// The path relative to the library root, for finding one's way around.
     File,
 }
 
 impl Column {
     /// Every column, for the show/hide menu.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::TrackNumber,
         Self::Title,
         Self::AlbumArtist,
@@ -72,6 +74,7 @@ impl Column {
         Self::Bitrate,
         Self::SampleRate,
         Self::BitDepth,
+        Self::PlayCount,
         Self::File,
     ];
 
@@ -115,6 +118,7 @@ impl Column {
             Self::Bitrate => "BITRATE",
             Self::SampleRate => "RATE",
             Self::BitDepth => "DEPTH",
+            Self::PlayCount => "PLAYS",
             Self::File => "FILE",
         }
     }
@@ -140,6 +144,7 @@ impl Column {
             Self::Bitrate => "Bitrate",
             Self::SampleRate => "Sample rate",
             Self::BitDepth => "Bit depth",
+            Self::PlayCount => "Play count",
             Self::File => "File path",
         }
     }
@@ -213,6 +218,12 @@ impl Column {
                 .audio
                 .bit_depth
                 .map_or_else(String::new, |d| format!("{d}-bit")),
+            // Blank rather than "0" for something never played: a column of
+            // zeroes is noise, and the rows with numbers in are the point.
+            Self::PlayCount => match track.play_count {
+                0 => String::new(),
+                n => n.to_string(),
+            },
             Self::File => track.path.as_path().to_string_lossy().into_owned(),
         }
     }
@@ -237,6 +248,7 @@ impl Column {
             Self::Bitrate => 80,
             Self::SampleRate => 70,
             Self::BitDepth => 60,
+            Self::PlayCount => 55,
             Self::File => 300,
         }
     }
@@ -282,6 +294,7 @@ impl Column {
             Self::Bitrate => F::Bitrate,
             Self::SampleRate => F::SampleRate,
             Self::BitDepth => F::BitDepth,
+            Self::PlayCount => F::PlayCount,
         }
     }
 }
@@ -638,6 +651,7 @@ mod tests {
         track.date = scoria_core::Date::parse("1992-09-29");
         track.added_at = scoria_core::Timestamp(1_700_000_000);
         track.replay_gain.track_gain_db = Some(-6.42);
+        track.play_count = 12;
         track.audio = scoria_core::model::AudioProperties {
             bitrate_kbps: Some(1034),
             sample_rate_hz: Some(44_100),
@@ -657,6 +671,7 @@ mod tests {
         assert_eq!(Column::Bitrate.value(&track), "1034 kbps");
         assert_eq!(Column::SampleRate.value(&track), "44.1 kHz");
         assert_eq!(Column::BitDepth.value(&track), "16-bit");
+        assert_eq!(Column::PlayCount.value(&track), "12");
         assert_eq!(Column::File.value(&track), "a/b.flac");
     }
 
@@ -681,6 +696,8 @@ mod tests {
             Column::Bitrate,
             Column::SampleRate,
             Column::BitDepth,
+            // Never played is blank, not "0": a column of zeroes is noise.
+            Column::PlayCount,
         ] {
             assert_eq!(
                 column.value(&track),

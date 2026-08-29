@@ -125,6 +125,29 @@ else
   pass "no panic lints allowed outside test modules"
 fi
 
+# DESIGN.md 7.3: every column exists in the panel that turns it on.
+#
+# The compiler forces a new `Column` variant to gain a heading, a name, a value
+# and a sort field -- every match over it is exhaustive. It does not force the
+# variant into `ALL`, which is a hand-written array, and a column missing from
+# there is a column nobody can switch on. That happened once: the play-count
+# column shipped with storage, a sort field and a commit message describing it,
+# and no way to see it.
+COLUMNS='scoria-gui/src/widgets/columns.rs'
+if [ -f "$COLUMNS" ]; then
+  declared=$(sed -n '/^pub enum Column {/,/^}/p' "$COLUMNS" \
+    | grep -oE '^    [A-Z][A-Za-z]*,$' | tr -d ' ,' | sort -u)
+  offered=$(sed -n '/pub const ALL:/,/^    \];$/p' "$COLUMNS" \
+    | grep -oE 'Self::[A-Z][A-Za-z]*' | sed 's/Self:://' | sort -u)
+  unoffered=$(comm -23 <(echo "$declared") <(echo "$offered"))
+  if [ -n "$unoffered" ]; then
+    fail "column not offered in the panel: $(echo "$unoffered" | tr '\n' ' ')"
+    echo "     DESIGN.md 7.3. Add it to Column::ALL, or it cannot be switched on."
+  else
+    pass "every column is offered in the panel"
+  fi
+fi
+
 # DESIGN.md 13: Scoria never talks to the internet.
 #
 # Checked against the dependency graph rather than against the code, because
