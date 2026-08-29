@@ -47,6 +47,9 @@ fn new_track(album_id: scoria_core::AlbumId, path: &str, title: &str) -> NewTrac
         duration: Duration::from_secs(200),
         replay_gain: ReplayGain::default(),
         added_at: Timestamp(1_700_000_000),
+        genre: None,
+        composer: None,
+        audio: scoria_core::model::AudioProperties::default(),
     }
 }
 
@@ -59,6 +62,56 @@ fn a_fresh_database_is_migrated_to_the_latest_schema() {
         db.schema_version().unwrap(),
         scoria_core::db::schema::latest_version()
     );
+}
+
+#[test]
+fn a_database_written_by_an_older_version_keeps_its_tracks() {
+    // The metadata columns arrived by ALTER TABLE, which is the migration shape
+    // most likely to be got wrong -- a rebuild would take the library with it.
+    // What has to survive is the rows: they cost a full rescan to replace, and
+    // an append-only migration list exists so they never have to be.
+    //
+    // The old shape is produced by dropping the v2 columns from a current
+    // database and winding the version back, which is closer to a real upgrade
+    // than a hand-copied v1 schema that would drift from the real one.
+    let dir = tempdir();
+    let path = dir.join("library.db");
+
+    {
+        let mut db = SqliteDatabase::open(&path).unwrap();
+        let album_id = album(&mut db, "Artist", "Album", "2020");
+        db.upsert_track(&new_track(album_id, "a/01.flac", "Before"))
+            .unwrap();
+    }
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        for column in [
+            "genre",
+            "composer",
+            "bitrate_kbps",
+            "sample_rate_hz",
+            "bit_depth",
+        ] {
+            conn.execute_batch(&format!("ALTER TABLE tracks DROP COLUMN {column}"))
+                .unwrap();
+        }
+        conn.execute_batch("PRAGMA user_version = 1").unwrap();
+    }
+
+    let db = SqliteDatabase::open(&path).unwrap();
+    assert_eq!(
+        db.schema_version().unwrap(),
+        scoria_core::db::schema::latest_version(),
+        "the database was not brought forward"
+    );
+
+    let tracks = db.all_tracks().unwrap();
+    assert_eq!(tracks.len(), 1, "the migration lost the library");
+    assert_eq!(tracks[0].title, "Before");
+    // Nothing backfills. The scanner reads every file's tags on every scan, so
+    // the next one fills these in; until then they are empty rather than wrong.
+    assert_eq!(tracks[0].genre, None);
+    assert_eq!(tracks[0].audio.sample_rate_hz, None);
 }
 
 #[test]

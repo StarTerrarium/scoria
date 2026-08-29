@@ -103,6 +103,25 @@ pub enum SortField {
     TrackNumber,
     Duration,
     DateAdded,
+
+    // Fields behind the optional columns (§7.3). Nothing structural sorts by
+    // any of these -- they exist so that a heading someone turned on is a
+    // working heading rather than a dead one.
+    /// Display only. §7.2 rules out a genre *pane*, because pane rows have to
+    /// partition the library and genre is many-valued; ordering by the tag as
+    /// written makes no such promise.
+    Genre,
+    Composer,
+    Bitrate,
+    SampleRate,
+    BitDepth,
+    /// The track's own ReplayGain, in decibels. Missing where the file is not
+    /// tagged, which is the point of showing it (§6.7).
+    TrackGain,
+    /// The path, relative to the library root. For finding one's way around a
+    /// library rather than for listening to it.
+    Path,
+
     /// The terminal tiebreaker. Every chain ends here, which is what makes
     /// equal-key rows stable across runs and queue snapshots reproducible.
     TrackId,
@@ -123,6 +142,9 @@ impl SortField {
         fn date(d: Option<Date>) -> SortValue<'static> {
             d.map_or(SortValue::Missing, SortValue::Date)
         }
+        fn count(n: Option<u32>) -> SortValue<'static> {
+            n.map_or(SortValue::Missing, |n| SortValue::Number(i64::from(n)))
+        }
 
         match self {
             Self::AlbumArtist => text(track.album_artist_key()),
@@ -137,6 +159,29 @@ impl SortField {
                 SortValue::Number(i64::try_from(track.duration.as_millis()).unwrap_or(i64::MAX))
             }
             Self::DateAdded => SortValue::Number(track.added_at.seconds()),
+            Self::Genre => track.genre.as_deref().map_or(SortValue::Missing, text),
+            Self::Composer => track.composer.as_deref().map_or(SortValue::Missing, text),
+            Self::Bitrate => count(track.audio.bitrate_kbps),
+            Self::SampleRate => count(track.audio.sample_rate_hz),
+            Self::BitDepth => track
+                .audio
+                .bit_depth
+                .map_or(SortValue::Missing, |d| SortValue::Number(i64::from(d))),
+            // Millibels, so a tenth of a decibel still orders without floats.
+            Self::TrackGain => track
+                .replay_gain
+                .track_gain_db
+                .map_or(SortValue::Missing, |db| {
+                    SortValue::Number((f64::from(db) * 100.0) as i64)
+                }),
+            // As text, which is what it is. A path that is not valid UTF-8
+            // sorts as missing rather than as an empty string, so it lands with
+            // the other unknowns instead of at the top.
+            Self::Path => track
+                .path
+                .as_path()
+                .to_str()
+                .map_or(SortValue::Missing, text),
             Self::TrackId => SortValue::Number(i64::try_from(track.id.get()).unwrap_or(i64::MAX)),
         }
     }
@@ -152,6 +197,8 @@ impl SortField {
             Self::Album | Self::AlbumTitle => Some(track.album.clone()),
             Self::Artist => Some(track.artist.clone()),
             Self::Date => track.date.map(|d| d.year().to_string()),
+            Self::Genre => track.genre.clone(),
+            Self::Composer => track.composer.clone(),
             _ => None,
         }
     }
@@ -166,7 +213,13 @@ impl SortField {
     pub const fn groups(self) -> bool {
         matches!(
             self,
-            Self::AlbumArtist | Self::Album | Self::AlbumTitle | Self::Artist | Self::Date
+            Self::AlbumArtist
+                | Self::Album
+                | Self::AlbumTitle
+                | Self::Artist
+                | Self::Date
+                | Self::Genre
+                | Self::Composer
         )
     }
 }

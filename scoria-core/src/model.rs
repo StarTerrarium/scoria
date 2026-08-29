@@ -19,6 +19,49 @@ impl Timestamp {
     pub const fn seconds(self) -> i64 {
         self.0
     }
+
+    /// The date, as `2026-08-29`.
+    ///
+    /// UTC, and deliberately not the local date: this is a library timestamp,
+    /// and a row that changes which day it says depending on where the machine
+    /// is sorts differently for the same reason.
+    ///
+    /// Written out rather than taken from a date library, because it is the
+    /// only calendar arithmetic in the project and a dependency for it would
+    /// pull in time zones, parsing and formatting that nothing here wants.
+    /// This is Howard Hinnant's `civil_from_days`, which is exact for every
+    /// representable day rather than approximate for recent ones.
+    #[must_use]
+    pub fn to_date_string(self) -> String {
+        const SECONDS_PER_DAY: i64 = 86_400;
+        // Shifts the epoch to 0000-03-01, which puts the leap day at the end of
+        // the cycle and makes the rest of this arithmetic branch-free.
+        const EPOCH_SHIFT: i64 = 719_468;
+        const DAYS_PER_ERA: i64 = 146_097;
+
+        // Floor division, so a pre-1970 timestamp lands on the day it is in
+        // rather than the one after it.
+        let days = self.0.div_euclid(SECONDS_PER_DAY);
+        let Some(z) = days.checked_add(EPOCH_SHIFT) else {
+            return String::new();
+        };
+
+        let era = z.div_euclid(DAYS_PER_ERA);
+        let day_of_era = z.rem_euclid(DAYS_PER_ERA);
+        let year_of_era =
+            (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146_096) / 365;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let month_shifted = (5 * day_of_year + 2) / 153;
+        let day = day_of_year - (153 * month_shifted + 2) / 5 + 1;
+        let month = if month_shifted < 10 {
+            month_shifted + 3
+        } else {
+            month_shifted - 9
+        };
+        let year = year_of_era + era * 400 + i64::from(month <= 2);
+
+        format!("{year:04}-{month:02}-{day:02}")
+    }
 }
 
 /// Which gain a track should play at.
@@ -87,6 +130,18 @@ impl ReplayGain {
     }
 }
 
+/// How the audio is encoded.
+///
+/// Read from the file rather than from a tag, so it says what is actually
+/// there: a 24-bit master and a 16-bit rip of it carry the same tags and are
+/// not the same file, and that difference is the whole reason for keeping one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioProperties {
+    pub bitrate_kbps: Option<u32>,
+    pub sample_rate_hz: Option<u32>,
+    pub bit_depth: Option<u8>,
+}
+
 /// One track.
 ///
 /// `album_artist` is structural and `artist` is display (`DESIGN.md` §4.1).
@@ -116,6 +171,15 @@ pub struct Track {
 
     pub replay_gain: ReplayGain,
     pub added_at: Timestamp,
+
+    /// Display only. §7.2 rules out a genre *pane*, because genre is
+    /// many-valued and pane rows have to partition the library; a column
+    /// renders the tag and makes no such promise.
+    pub genre: Option<String>,
+    pub composer: Option<String>,
+    /// Read from the file, not from a tag: a 24-bit master and a 16-bit rip of
+    /// it carry the same tags and are not the same file.
+    pub audio: AudioProperties,
 
     /// False once the file stops resolving. Such tracks are shown struck
     /// through and skipped on advance, never silently dropped (§7.4).
@@ -163,6 +227,47 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::float_cmp)]
 
     use super::*;
+
+    #[test]
+    fn a_timestamp_renders_as_a_date() {
+        // Calendar arithmetic written by hand earns a test on the cases that
+        // break it: a leap day, the day either side of one, a century that is
+        // not a leap year, and one that is.
+        for (seconds, expected) in [
+            (0, "1970-01-01"),
+            (1, "1970-01-01"),
+            (86_399, "1970-01-01"),
+            (86_400, "1970-01-02"),
+            (1_700_000_000, "2023-11-14"),
+            // 2024 is a leap year: 29 February exists and 1 March follows it.
+            (1_709_164_800, "2024-02-29"),
+            (1_709_251_200, "2024-03-01"),
+            // 2000 was a leap year; 1900 was not, which is the rule most
+            // hand-written versions of this get wrong.
+            (951_782_400, "2000-02-29"),
+            (-2_203_891_200, "1900-03-01"),
+            // Before the epoch, where floor division is what keeps the day from
+            // slipping forward by one.
+            (-1, "1969-12-31"),
+            (-86_400, "1969-12-31"),
+        ] {
+            assert_eq!(
+                Timestamp(seconds).to_date_string(),
+                expected,
+                "at {seconds}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_impossible_timestamp_is_absurd_rather_than_fatal() {
+        // Nothing produces these, but the type permits them, and a column that
+        // panicked on a corrupt row would take the window with it. The answer
+        // is nonsense, and nonsense in one cell is the right amount of damage.
+        for seconds in [i64::MAX, i64::MIN] {
+            assert!(!Timestamp(seconds).to_date_string().is_empty());
+        }
+    }
 
     fn gain(track: Option<f32>, album: Option<f32>) -> ReplayGain {
         ReplayGain {

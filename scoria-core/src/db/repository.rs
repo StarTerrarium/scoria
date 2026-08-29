@@ -13,7 +13,7 @@ use crate::date::Date;
 use crate::error::CoreError;
 use crate::id::{AlbumId, TrackId};
 use crate::library::AlbumIdentity;
-use crate::model::{Album, ReplayGain, Timestamp, Track};
+use crate::model::{Album, AudioProperties, ReplayGain, Timestamp, Track};
 use crate::path::RelativePath;
 use std::time::Duration;
 
@@ -33,6 +33,9 @@ pub struct NewTrack {
     pub duration: Duration,
     pub replay_gain: ReplayGain,
     pub added_at: Timestamp,
+    pub genre: Option<String>,
+    pub composer: Option<String>,
+    pub audio: AudioProperties,
 }
 
 /// An album as the scanner produces it.

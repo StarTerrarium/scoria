@@ -17,10 +17,33 @@ struct Migration {
 }
 
 /// Append only. Never edit an entry that has shipped.
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: SCHEMA_V1,
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: SCHEMA_V1,
+    },
+    Migration {
+        version: 2,
+        sql: SCHEMA_V2,
+    },
+];
+
+/// Metadata that is shown but never structural.
+///
+/// Genre and composer are tags; the encoding figures are read from the file
+/// itself, because a 24-bit master and a 16-bit rip of it carry the same tags
+/// and are not the same file.
+///
+/// Nothing backfills these. The scanner reads every file's tags on every scan
+/// -- it has no mtime shortcut -- so the next scan fills them in, and until
+/// then the columns are empty rather than wrong.
+const SCHEMA_V2: &str = "
+ALTER TABLE tracks ADD COLUMN genre          TEXT;
+ALTER TABLE tracks ADD COLUMN composer       TEXT;
+ALTER TABLE tracks ADD COLUMN bitrate_kbps   INTEGER;
+ALTER TABLE tracks ADD COLUMN sample_rate_hz INTEGER;
+ALTER TABLE tracks ADD COLUMN bit_depth      INTEGER;
+";
 
 /// The initial schema.
 ///

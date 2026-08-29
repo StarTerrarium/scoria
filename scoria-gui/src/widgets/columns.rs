@@ -25,11 +25,36 @@ pub enum Column {
     Album,
     Duration,
     Year,
+
+    // Off by default. §7.3's default set is what most people want to look at;
+    // these are here because a library-centric player is also a place where
+    // people go to answer questions about their library, and the answers are
+    // in the tags.
+    Disc,
+    /// The full release date, where `Year` shows only the year.
+    Released,
+    /// When the scan first saw the file.
+    Added,
+    /// §7.2 rules out a genre *pane* -- pane rows have to partition the
+    /// library, and genre is many-valued. A column renders the tag as written
+    /// and promises nothing about counts, so the argument does not reach it.
+    Genre,
+    Composer,
+    /// The track's own ReplayGain (§6.7). Blank where the file is untagged,
+    /// which is what makes the coverage visible track by track.
+    Gain,
+    /// What the file is, as the decoder sees it.
+    Format,
+    Bitrate,
+    SampleRate,
+    BitDepth,
+    /// The path relative to the library root, for finding one's way around.
+    File,
 }
 
 impl Column {
     /// Every column, for the show/hide menu.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 18] = [
         Self::TrackNumber,
         Self::Title,
         Self::AlbumArtist,
@@ -37,7 +62,38 @@ impl Column {
         Self::Album,
         Self::Duration,
         Self::Year,
+        Self::Disc,
+        Self::Released,
+        Self::Added,
+        Self::Genre,
+        Self::Composer,
+        Self::Gain,
+        Self::Format,
+        Self::Bitrate,
+        Self::SampleRate,
+        Self::BitDepth,
+        Self::File,
     ];
+
+    /// Whether it is shown before anyone chooses.
+    ///
+    /// §7.3's default set, and nothing else. This is what stops a new column
+    /// appearing unbidden in a table someone already arranged: `repaired`
+    /// appends columns a settings file has never heard of, and appending them
+    /// visible would rearrange the table on upgrade.
+    #[must_use]
+    pub const fn visible_by_default(self) -> bool {
+        matches!(
+            self,
+            Self::TrackNumber
+                | Self::Title
+                | Self::AlbumArtist
+                | Self::Artist
+                | Self::Album
+                | Self::Duration
+                | Self::Year
+        )
+    }
 
     #[must_use]
     pub const fn heading(self) -> &'static str {
@@ -49,6 +105,17 @@ impl Column {
             Self::Album => "ALBUM",
             Self::Duration => "TIME",
             Self::Year => "YEAR",
+            Self::Disc => "DISC",
+            Self::Released => "RELEASED",
+            Self::Added => "ADDED",
+            Self::Genre => "GENRE",
+            Self::Composer => "COMPOSER",
+            Self::Gain => "GAIN",
+            Self::Format => "FORMAT",
+            Self::Bitrate => "BITRATE",
+            Self::SampleRate => "RATE",
+            Self::BitDepth => "DEPTH",
+            Self::File => "FILE",
         }
     }
 
@@ -63,6 +130,17 @@ impl Column {
             Self::Album => "Album",
             Self::Duration => "Duration",
             Self::Year => "Year",
+            Self::Disc => "Disc number",
+            Self::Released => "Release date",
+            Self::Added => "Date added",
+            Self::Genre => "Genre",
+            Self::Composer => "Composer",
+            Self::Gain => "ReplayGain",
+            Self::Format => "File format",
+            Self::Bitrate => "Bitrate",
+            Self::SampleRate => "Sample rate",
+            Self::BitDepth => "Bit depth",
+            Self::File => "File path",
         }
     }
 
@@ -103,6 +181,39 @@ impl Column {
             Self::Year => track
                 .date
                 .map_or_else(String::new, |d| d.year().to_string()),
+            Self::Disc => track.disc.map_or_else(String::new, |d| d.to_string()),
+            Self::Released => track.date.map_or_else(String::new, |d| d.to_string()),
+            Self::Added => track.added_at.to_date_string(),
+            Self::Genre => track.genre.clone().unwrap_or_default(),
+            Self::Composer => track.composer.clone().unwrap_or_default(),
+            // Blank where untagged, rather than "0.0 dB". Zero is what an
+            // untagged track is *played* at (§6.7), and printing it here would
+            // make an absent tag look like a measured one.
+            Self::Gain => track
+                .replay_gain
+                .track_gain_db
+                .map_or_else(String::new, |db| format!("{db:+.1} dB")),
+            Self::Format => track
+                .path
+                .as_path()
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_uppercase)
+                .unwrap_or_default(),
+            Self::Bitrate => track
+                .audio
+                .bitrate_kbps
+                .map_or_else(String::new, |k| format!("{k} kbps")),
+            // kHz with one decimal: 44.1 and 48 are the two everyone reads, and
+            // 44100 makes the column wide for no gain.
+            Self::SampleRate => track.audio.sample_rate_hz.map_or_else(String::new, |hz| {
+                format!("{:.1} kHz", f64::from(hz) / 1000.0)
+            }),
+            Self::BitDepth => track
+                .audio
+                .bit_depth
+                .map_or_else(String::new, |d| format!("{d}-bit")),
+            Self::File => track.path.as_path().to_string_lossy().into_owned(),
         }
     }
 
@@ -116,6 +227,17 @@ impl Column {
             Self::Album => 200,
             Self::Duration => 60,
             Self::Year => 50,
+            Self::Disc => 40,
+            Self::Released => 90,
+            Self::Added => 90,
+            Self::Genre => 160,
+            Self::Composer => 160,
+            Self::Gain => 70,
+            Self::Format => 60,
+            Self::Bitrate => 80,
+            Self::SampleRate => 70,
+            Self::BitDepth => 60,
+            Self::File => 300,
         }
     }
 
@@ -147,7 +269,19 @@ impl Column {
             Self::Artist => F::Artist,
             Self::Album => F::AlbumTitle,
             Self::Duration => F::Duration,
-            Self::Year => F::Date,
+            Self::Year | Self::Released => F::Date,
+            Self::Disc => F::Disc,
+            Self::Added => F::DateAdded,
+            Self::Genre => F::Genre,
+            Self::Composer => F::Composer,
+            Self::Gain => F::TrackGain,
+            // The extension is the front of the path, near enough: sorting by
+            // it groups the formats together, which is the question being
+            // asked, and there is no stored format field to sort on.
+            Self::Format | Self::File => F::Path,
+            Self::Bitrate => F::Bitrate,
+            Self::SampleRate => F::SampleRate,
+            Self::BitDepth => F::BitDepth,
         }
     }
 }
@@ -175,27 +309,24 @@ pub struct ColumnLayout {
 impl Default for ColumnLayout {
     /// §7.3's default set.
     ///
-    /// The order here is the one the application ships with rather than the
-    /// order §7.3 lists them in: duration reads better beside the other short
-    /// numeric columns than wedged between the title and the artist.
+    /// Every column is present; the optional ones are simply off (§7.3). That
+    /// is what makes the panel a list of what exists rather than a list of what
+    /// happens to be on.
+    ///
+    /// The order is `Column::ALL`, which is the one the application ships with
+    /// rather than the order §7.3 lists them in: duration reads better beside
+    /// the other short numeric columns than wedged between the title and the
+    /// artist.
     fn default() -> Self {
         Self {
-            columns: [
-                Column::TrackNumber,
-                Column::Title,
-                Column::AlbumArtist,
-                Column::Artist,
-                Column::Album,
-                Column::Duration,
-                Column::Year,
-            ]
-            .into_iter()
-            .map(|column| ColumnSetting {
-                column,
-                visible: true,
-                weight: column.default_weight(),
-            })
-            .collect(),
+            columns: Column::ALL
+                .into_iter()
+                .map(|column| ColumnSetting {
+                    column,
+                    visible: column.visible_by_default(),
+                    weight: column.default_weight(),
+                })
+                .collect(),
         }
     }
 }
@@ -228,7 +359,7 @@ impl ColumnLayout {
             if !seen.contains(&column) {
                 self.columns.push(ColumnSetting {
                     column,
-                    visible: true,
+                    visible: column.visible_by_default(),
                     weight: column.default_weight(),
                 });
             }
@@ -431,14 +562,118 @@ mod tests {
             duration: std::time::Duration::from_secs(100),
             replay_gain: scoria_core::ReplayGain::default(),
             added_at: scoria_core::Timestamp(0),
+            genre: None,
+            composer: None,
+            audio: scoria_core::model::AudioProperties::default(),
             available: true,
         }
     }
 
     #[test]
-    fn the_default_shows_every_column() {
+    fn the_optional_columns_render_what_they_claim_to() {
+        let mut track = playing_track();
+        track.genre = Some("Grunge; Alternative Metal".to_owned());
+        track.composer = Some("Jerry Cantrell".to_owned());
+        track.date = scoria_core::Date::parse("1992-09-29");
+        track.added_at = scoria_core::Timestamp(1_700_000_000);
+        track.replay_gain.track_gain_db = Some(-6.42);
+        track.audio = scoria_core::model::AudioProperties {
+            bitrate_kbps: Some(1034),
+            sample_rate_hz: Some(44_100),
+            bit_depth: Some(16),
+        };
+
+        assert_eq!(Column::Disc.value(&track), "1");
+        assert_eq!(Column::Released.value(&track), "1992-09-29");
+        assert_eq!(Column::Year.value(&track), "1992");
+        assert_eq!(Column::Added.value(&track), "2023-11-14");
+        assert_eq!(Column::Genre.value(&track), "Grunge; Alternative Metal");
+        assert_eq!(Column::Composer.value(&track), "Jerry Cantrell");
+        // Signed, because the sign is the whole information: this track plays
+        // quieter than reference, and a bare "6.4" would read as louder.
+        assert_eq!(Column::Gain.value(&track), "-6.4 dB");
+        assert_eq!(Column::Format.value(&track), "FLAC");
+        assert_eq!(Column::Bitrate.value(&track), "1034 kbps");
+        assert_eq!(Column::SampleRate.value(&track), "44.1 kHz");
+        assert_eq!(Column::BitDepth.value(&track), "16-bit");
+        assert_eq!(Column::File.value(&track), "a/b.flac");
+    }
+
+    #[test]
+    fn a_boost_reads_as_a_boost() {
+        let mut track = playing_track();
+        track.replay_gain.track_gain_db = Some(2.5);
+        assert_eq!(Column::Gain.value(&track), "+2.5 dB");
+    }
+
+    #[test]
+    fn absent_metadata_is_blank_rather_than_invented() {
+        // An untagged track plays at 0 dB (§6.7), but printing "0.0 dB" here
+        // would make an absent tag look like a measured one -- and the whole
+        // point of the column is seeing which files lack it. The same applies
+        // to every other optional column.
+        let track = playing_track();
+        for column in [
+            Column::Genre,
+            Column::Composer,
+            Column::Gain,
+            Column::Bitrate,
+            Column::SampleRate,
+            Column::BitDepth,
+        ] {
+            assert_eq!(
+                column.value(&track),
+                "",
+                "{} invented a value",
+                column.name()
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_shows_the_default_set_and_offers_the_rest() {
+        // §7.3's default set is what opens; the optional columns are present in
+        // the panel and off. A new column arriving visible would rearrange a
+        // table someone had already arranged.
         let layout = ColumnLayout::default();
-        assert_eq!(layout.visible().len(), Column::ALL.len());
+        assert_eq!(layout.all().len(), Column::ALL.len());
+        assert!(
+            layout.visible().len() < Column::ALL.len(),
+            "every column is on by default, so the optional ones are not optional"
+        );
+        for setting in layout.all() {
+            assert_eq!(
+                setting.visible,
+                setting.column.visible_by_default(),
+                "{:?} does not open as it says it does",
+                setting.column
+            );
+        }
+    }
+
+    #[test]
+    fn a_settings_file_that_predates_a_column_does_not_gain_it_visibly() {
+        // The upgrade path: `repaired` appends columns the file has never heard
+        // of, and appending them visible would change the table under someone
+        // who had arranged it.
+        let full = ColumnLayout::default();
+        let trimmed: Vec<_> = full
+            .all()
+            .iter()
+            .copied()
+            .filter(|c| c.column != Column::Genre)
+            .collect();
+
+        // Through serde, because that is how a settings file actually arrives.
+        let text = serde_json::to_string(&trimmed).unwrap();
+        let stale: ColumnLayout = serde_json::from_str(&text).unwrap();
+        let repaired = stale.repaired();
+        let genre = repaired
+            .all()
+            .iter()
+            .find(|c| c.column == Column::Genre)
+            .unwrap();
+        assert!(!genre.visible, "the restored column arrived switched on");
     }
 
     #[test]

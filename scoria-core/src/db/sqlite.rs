@@ -9,7 +9,7 @@ use crate::db::schema;
 use crate::error::CoreError;
 use crate::id::{AlbumId, TrackId};
 use crate::library::AlbumIdentity;
-use crate::model::{Album, ReplayGain, Timestamp, Track};
+use crate::model::{Album, AudioProperties, ReplayGain, Timestamp, Track};
 use crate::path::RelativePath;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::path::Path;
@@ -119,6 +119,18 @@ fn read_u16(row: &Row<'_>, column: &str) -> rusqlite::Result<Option<u16>> {
         .and_then(|v| u16::try_from(v).ok()))
 }
 
+fn read_u32(row: &Row<'_>, column: &str) -> rusqlite::Result<Option<u32>> {
+    Ok(row
+        .get::<_, Option<i64>>(column)?
+        .and_then(|v| u32::try_from(v).ok()))
+}
+
+fn read_u8(row: &Row<'_>, column: &str) -> rusqlite::Result<Option<u8>> {
+    Ok(row
+        .get::<_, Option<i64>>(column)?
+        .and_then(|v| u8::try_from(v).ok()))
+}
+
 fn read_gain(row: &Row<'_>) -> rusqlite::Result<ReplayGain> {
     Ok(ReplayGain {
         track_gain_db: row.get("rg_track_gain")?,
@@ -159,6 +171,13 @@ fn read_track(row: &Row<'_>) -> Result<Track, CoreError> {
         replay_gain: read_gain(row).map_err(map)?,
         added_at: Timestamp(row.get("added_at").map_err(map)?),
         available: row.get::<_, i64>("available").map_err(map)? != 0,
+        genre: row.get("genre").map_err(map)?,
+        composer: row.get("composer").map_err(map)?,
+        audio: AudioProperties {
+            bitrate_kbps: read_u32(row, "bitrate_kbps").map_err(map)?,
+            sample_rate_hz: read_u32(row, "sample_rate_hz").map_err(map)?,
+            bit_depth: read_u8(row, "bit_depth").map_err(map)?,
+        },
     })
 }
 
@@ -176,7 +195,8 @@ fn read_album(row: &Row<'_>) -> Result<Album, CoreError> {
 
 const TRACK_COLUMNS: &str = "id, album_id, path, title, artist, album_artist, album_artist_sort, \
      album, date_year, date_month, date_day, disc, track_number, duration_ms, \
-     rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, added_at, available";
+     rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, added_at, available, \
+     genre, composer, bitrate_kbps, sample_rate_hz, bit_depth";
 
 const ALBUM_COLUMNS: &str =
     "id, identity, title, album_artist, album_artist_sort, date_year, date_month, date_day";
@@ -204,10 +224,11 @@ impl TrackRepository for SqliteDatabase {
                          album_id, path, title, artist, album_artist, album_artist_sort, album,
                          date_year, date_month, date_day, disc, track_number, duration_ms,
                          rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak,
-                         added_at, available
+                         added_at, genre, composer, bitrate_kbps, sample_rate_hz, bit_depth,
+                         available
                      ) VALUES (
                          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                         ?14, ?15, ?16, ?17, ?18, 1
+                         ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, 1
                      )
                      ON CONFLICT(path) DO UPDATE SET
                          album_id = excluded.album_id,
@@ -226,6 +247,11 @@ impl TrackRepository for SqliteDatabase {
                          rg_track_peak = excluded.rg_track_peak,
                          rg_album_gain = excluded.rg_album_gain,
                          rg_album_peak = excluded.rg_album_peak,
+                         genre = excluded.genre,
+                         composer = excluded.composer,
+                         bitrate_kbps = excluded.bitrate_kbps,
+                         sample_rate_hz = excluded.sample_rate_hz,
+                         bit_depth = excluded.bit_depth,
                          available = 1
                      RETURNING id",
                 )
@@ -255,6 +281,11 @@ impl TrackRepository for SqliteDatabase {
                             track.replay_gain.album_gain_db,
                             track.replay_gain.album_peak,
                             track.added_at.seconds(),
+                            track.genre,
+                            track.composer,
+                            track.audio.bitrate_kbps.map(i64::from),
+                            track.audio.sample_rate_hz.map(i64::from),
+                            track.audio.bit_depth.map(i64::from),
                         ],
                         |row| row.get(0),
                     )

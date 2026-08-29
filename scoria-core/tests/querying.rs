@@ -95,6 +95,9 @@ impl Library {
                     duration: Duration::from_secs(200 + n as u64),
                     replay_gain: ReplayGain::default(),
                     added_at: Timestamp(1_700_000_000 + next_path as i64),
+                    genre: None,
+                    composer: None,
+                    audio: scoria_core::model::AudioProperties::default(),
                 })
                 .unwrap();
             }
@@ -577,6 +580,9 @@ fn an_artist_name_containing_a_quote_is_a_value_not_syntax() {
             duration: Duration::from_secs(100),
             replay_gain: ReplayGain::default(),
             added_at: Timestamp(0),
+            genre: None,
+            composer: None,
+            audio: scoria_core::model::AudioProperties::default(),
         })
         .unwrap();
 

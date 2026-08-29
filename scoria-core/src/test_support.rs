@@ -38,6 +38,9 @@ impl TrackBuilder {
                 duration: Duration::from_secs(200),
                 replay_gain: ReplayGain::default(),
                 added_at: Timestamp(1_700_000_000),
+                genre: None,
+                composer: None,
+                audio: crate::model::AudioProperties::default(),
                 available: true,
             },
         }

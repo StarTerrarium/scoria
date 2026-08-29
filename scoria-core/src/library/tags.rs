@@ -11,6 +11,7 @@
 
 use crate::date::Date;
 use crate::error::CoreError;
+use crate::model::AudioProperties;
 use crate::model::ReplayGain;
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::prelude::ItemKey;
@@ -63,6 +64,14 @@ pub struct TrackTags {
     pub musicbrainz_album_id: Option<String>,
     pub replay_gain: ReplayGain,
     pub has_embedded_artwork: bool,
+    /// Shown in a column only. §7.2 rules out a genre *pane* -- genre is
+    /// many-valued, so its rows cannot partition the library -- but that
+    /// argument is about counts adding up, and a column that renders the tag
+    /// has no such contract to break.
+    pub genre: Option<String>,
+    pub composer: Option<String>,
+    /// What the file is, as the decoder sees it, rather than what it is called.
+    pub audio: AudioProperties,
 }
 
 /// Opens a file for reading tags, by extension and then by content.
@@ -103,6 +112,14 @@ pub fn read(path: &Path) -> Result<TrackTags, CoreError> {
     let file = open(path)?;
 
     let duration = file.properties().duration();
+    let audio = AudioProperties {
+        // Audio bitrate rather than overall: the overall figure includes the
+        // tag block and embedded artwork, which for a FLAC with a large cover
+        // is a visibly wrong answer to "how good is this file".
+        bitrate_kbps: file.properties().audio_bitrate(),
+        sample_rate_hz: file.properties().sample_rate(),
+        bit_depth: file.properties().bit_depth(),
+    };
     // The primary tag is the format's native one; a file with only a foreign
     // tag block still has readable metadata, so fall back rather than give up.
     let tag = file.primary_tag().or_else(|| file.first_tag());
@@ -111,6 +128,7 @@ pub fn read(path: &Path) -> Result<TrackTags, CoreError> {
         // No tags at all is normal for a stray rip, not an error.
         return Ok(TrackTags {
             duration,
+            audio,
             ..TrackTags::default()
         });
     };
@@ -128,6 +146,9 @@ pub fn read(path: &Path) -> Result<TrackTags, CoreError> {
         musicbrainz_album_id: text(tag, ItemKey::MusicBrainzReleaseId),
         replay_gain: read_replay_gain(tag),
         has_embedded_artwork: !tag.pictures().is_empty(),
+        genre: text(tag, ItemKey::Genre),
+        composer: text(tag, ItemKey::Composer),
+        audio,
     })
 }
 

@@ -425,6 +425,18 @@ The layout is repaired when read. A settings file can be older than the applicat
 
 Default columns: track number, title, duration, album artist, artist, album, year. Album artist and artist both shown by default, deliberately (§4.1).
 
+**Eleven more are available and off.** Disc, release date, date added, genre, composer, ReplayGain, file format, bitrate, sample rate, bit depth, and the file's path. A library-centric player is also where someone goes to answer questions *about* their library -- which of these are untagged, which are the lossy ones, what the 24-bit rips are -- and the answers are in the tags already.
+
+They are off by default and every one of them stays off on upgrade: the layout is repaired when read, and a column a settings file has never heard of is appended hidden. Appending it visible would rearrange a table someone had already arranged.
+
+**A genre column is not a genre pane.** §7.2 rules out the pane because pane rows have to partition the library and genre is many-valued -- Picard writes `Grunge; Alternative Metal; Heavy Metal` and means all three. A column renders the tag as written and promises nothing about counts, so that argument does not reach it. Grouping and filtering still never touch genre.
+
+The encoding figures are read from the file rather than from a tag, because that is the only place they are true: a 24-bit master and a 16-bit rip of it carry the same tags and are not the same file. Audio bitrate, not overall bitrate -- the overall figure includes the tag block and the embedded cover, which for a FLAC with large artwork is a visibly wrong answer to "how good is this file".
+
+An untagged field is blank, never a stand-in value. ReplayGain is the case that matters: an untagged track *plays* at 0 dB (§6.7), but printing "0.0 dB" would make an absent tag look like a measured one, and seeing which files lack it is the reason to show the column at all.
+
+Nothing backfills. The scanner reads every file's tags on every scan -- it has no mtime shortcut -- so the next scan fills these in, and until then they are empty rather than wrong.
+
 **Sort** is a `Vec<SortKey>` (§4.4). 1.0 ships presets rather than a chain builder:
 
 - Artist chronological (default) — `albumartistsort`, `date`, `disc`, `track`

@@ -345,6 +345,9 @@ impl<'a> Scanner<'a> {
             duration: tags.duration,
             replay_gain: tags.replay_gain,
             added_at: Timestamp(now),
+            genre: tags.genre.clone(),
+            composer: tags.composer.clone(),
+            audio: tags.audio,
         }
     }
 
