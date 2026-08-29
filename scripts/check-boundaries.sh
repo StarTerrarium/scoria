@@ -125,4 +125,23 @@ else
   pass "no panic lints allowed outside test modules"
 fi
 
+# DESIGN.md 13: Scoria never talks to the internet.
+#
+# Checked against the dependency graph rather than against the code, because
+# that is where it would arrive: nobody writes a socket by hand, they add a
+# crate that already has one. D-Bus is deliberately not listed -- souvlaki talks
+# to the desktop over a local socket (DESIGN.md 12), which is not the internet.
+network_crates='^(reqwest|hyper|hyper-util|ureq|isahc|surf|attohttpc|curl|curl-sys|awc|tungstenite|tokio-tungstenite|rustls|native-tls|openssl|openssl-sys|hickory-resolver|hickory-proto|trust-dns-resolver)$'
+if command -v cargo >/dev/null; then
+  online=$(cargo tree --workspace -e normal 2>/dev/null \
+    | grep -oE '[a-z0-9_-]+ v[0-9]' | sed 's/ v[0-9]//' | sort -u \
+    | grep -E "$network_crates" || true)
+  if [ -n "$online" ]; then
+    fail "a network client is in the dependency graph: $(echo "$online" | tr '\n' ' ')"
+    echo "     DESIGN.md 13. Scoria reads the library on disk and nothing else."
+  else
+    pass "nothing in the tree can reach the internet"
+  fi
+fi
+
 exit $status

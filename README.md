@@ -94,6 +94,14 @@ cargo test --workspace
 ./scripts/check-boundaries.sh   # architectural invariants CI also enforces
 ```
 
+## No network
+
+Scoria does not talk to the internet -- not for artwork, tags, lookups, updates
+or telemetry. It reads the library on disk and nothing else, and that is a
+decision about what the application is rather than a privacy feature bolted on.
+The build enforces it: `scripts/check-boundaries.sh` fails if an HTTP or TLS
+client appears anywhere in the dependency graph.
+
 ## No-panic policy
 
 The application is written to have no known way to panic at runtime. `unwrap`,

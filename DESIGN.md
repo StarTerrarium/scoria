@@ -383,6 +383,8 @@ Judged on the position reached, not on time spent listening, so seeking past the
 
 A track's identity is its path (§5.2), so renaming a file outside Scoria starts it over. That is the same limitation availability has, and the same fix would serve both if it ever matters enough.
 
+**It is not going to be fixed for this.** Identity by anything sturdier means matching on tags, or on audio content, or on a MusicBrainz id looked up somewhere -- confidence scores, tie-breaks, and an external source of truth Scoria is never going to ask (§13). For a number kept because it is fun, a path is the right amount of machinery. A renamed file starting over is a fair price.
+
 The column is blank rather than `0` for something never played: a column of zeroes is noise, and the rows with numbers in them are the point.
 
 ---
@@ -667,6 +669,16 @@ The same measurement is what rules out the alternatives. It is not the scan thre
 ---
 
 ## 13. Scope
+
+### Never
+
+**Scoria does not talk to the internet.** Not for artwork, not for tags, not for lookups, not for updates, not for telemetry. It reads the library on disk and nothing else.
+
+This is a decision about what the application *is*, not a privacy feature bolted to the side. A player that fetches becomes a player that has opinions about your tags, that behaves differently offline, that has a cache to invalidate and a service to be deprecated by. The library on disk is the source of truth (§5.1), and the whole design leans on that: album identity, sort order and search all answer from what Picard already wrote into the files.
+
+It is enforced rather than intended. `scripts/check-boundaries.sh` fails the build if an HTTP or TLS client appears anywhere in the dependency graph, because that is how it would arrive -- nobody writes a socket by hand, they add a crate that already has one. D-Bus is deliberately exempt: souvlaki talks to the desktop over a local socket (§12), which is not the internet.
+
+The MusicBrainz identifiers in §4.2 are read from tags. Scoria consumes what MusicBrainz knows because Picard already put it in the files; it never asks MusicBrainz anything.
 
 ### 1.0
 

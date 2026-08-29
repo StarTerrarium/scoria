@@ -52,11 +52,26 @@ Everywhere it is shown by default. The only exception is the explicit right-clic
 
 Filter panes, grouping, and sorting always use `albumartist` / `albumartistsort`. `artist` is only ever rendered in a column. Never build a filter pane or a group key from `artist`.
 
-### 8. Audio runs on its own OS thread
+### 8. Scoria never talks to the internet
+
+Not for artwork, tags, lookups, updates or telemetry. The library on disk is the
+only source of truth. `check-boundaries.sh` fails the build if an HTTP or TLS
+client appears anywhere in the dependency graph, because that is how it would
+arrive -- nobody writes a socket by hand, they add a crate that has one.
+
+D-Bus is exempt and is not an exception: souvlaki talks to the local desktop
+(§12), not to a network. MusicBrainz ids are read from tags Picard wrote; Scoria
+consumes what MusicBrainz knows and never asks it anything.
+
+*How to tell you have broken it:* the dependency graph gained `reqwest`,
+`hyper`, `ureq`, `rustls` or similar. Adding a feature that "just needs to fetch
+X" is the shape of the mistake.
+
+### 9. Audio runs on its own OS thread
 
 `std::thread::spawn` plus `std::sync::mpsc`. Never a tokio task, never `async` in the playback path. Tokio is for scanning, tag reading, artwork caching, and database I/O.
 
-### 9. Hardcode the value, not the shape
+### 10. Hardcode the value, not the shape
 
 Deferred features ship with their data shape in place and one hardcoded value:
 
@@ -137,8 +152,9 @@ scoria-tui/ arrives post-1.0. It is deliberately not an empty crate until then.
 
 `./scripts/check-boundaries.sh` checks the invariants above that the compiler
 cannot express: core's dependency graph is free of UI crates, there is only one
-track table, iced `Color` never leaves `theme/`, raw SQL never leaves `db/`, and
-no panic lint has been `allow`ed outside a test module.
+track table, iced `Color` never leaves `theme/`, raw SQL never leaves `db/`, no
+panic lint has been `allow`ed outside a test module, and nothing in the
+dependency graph can reach the internet.
 CI runs it on every push. Run it before committing; if you add an invariant to
 this file, add a check for it there too.
 
