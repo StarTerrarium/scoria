@@ -71,9 +71,13 @@ msrv:
 release:
     cargo build --workspace --release
 
+# --force because reinstalling over your own previous build is the normal case,
+# and cargo refuses when the binary is already owned by another package -- which
+# is what every install did after scoria-cli became scoria-bin.
+
 # Install the binary into ~/.cargo/bin.
 install: && desktop-install
-    cargo install --path scoria-bin --locked
+    cargo install --path scoria-bin --locked --force
 
 # Per-user, under XDG_DATA_HOME. Nothing is written outside the home directory.
 
@@ -95,8 +99,20 @@ uninstall:
     rm -f "$data/applications/scoria.desktop" \
           "$data/icons/hicolor/scalable/apps/scoria.svg" \
           "$data/icons/hicolor/256x256/apps/scoria.png"
-    cargo uninstall scoria-bin 2>/dev/null || true
-    echo "removed. Settings and the library database are left alone -- see just clean-all"
+    # scoria-cli is what this crate was called before the rename, and an
+    # install from before then still owns the binary. Both are tried, and what
+    # actually happened is reported -- the first version of this swallowed the
+    # failure and claimed success while removing nothing.
+    removed=()
+    for pkg in scoria-bin scoria-cli; do
+        if cargo uninstall "$pkg" >/dev/null 2>&1; then removed+=("$pkg"); fi
+    done
+    if [ ${#removed[@]} -eq 0 ]; then
+        echo "desktop entry removed. No installed binary to remove."
+    else
+        echo "removed: ${removed[*]}, and the desktop entry."
+    fi
+    echo "Settings and the library database are left alone -- see just clean-all"
 
 # --------------------------------------------------------------- inspecting --
 
