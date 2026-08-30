@@ -5,20 +5,27 @@
 //! The first version of the query engine went to storage for every query. That
 //! is the obvious design and it is too slow: constructing a hundred thousand
 //! `Track` values, each with its own string allocations, costs about half a
-//! second, and it costs that whether the query returns the whole library or
-//! fifty rows. Measured at the six-figure scale §14 says to design for:
+//! second, and it costs that whether the query returns the whole library or a
+//! hundred rows. Measured at the six-figure scale §14 says to design for:
 //!
-//! | Query | Via storage | Via this index |
-//! |---|---|---|
-//! | Unfiltered library | 548 ms | 57 ms |
-//! | One artist (50 rows) | 335 ms | 9 ms |
-//! | Search | 324 ms | 4 ms |
+//! | Query | Via storage | Via this index | Rows |
+//! |---|---|---|---|
+//! | Unfiltered library | 526 ms | 51 ms | 100,000 |
+//! | One artist | 483 ms | 10 ms | 96 |
+//! | Search | 481 ms | 5 ms | 11 |
 //!
-//! A search box runs a query per keystroke, so 300 ms is not a slow path, it is
-//! the normal path.
+//! Note what the storage column does *not* do: it barely moves between a query
+//! returning the whole library and one returning eleven rows, because almost
+//! all of it is reading the library back. That is the shape of the problem, and
+//! it is why narrowing the query was never going to fix it.
+//!
+//! A search box runs a query per keystroke, so half a second is not a slow
+//! path, it is the normal path.
 //!
 //! Re-measure with `just bench-query`; the harness is
-//! `scoria-core/examples/query_scale.rs`.
+//! `scoria-core/examples/query_scale.rs`, and the numbers above are what it
+//! prints. It is a synthetic library rather than a real one, so treat the
+//! ratios as the point rather than the absolute figures.
 //!
 //! Holding the library in memory is also what makes the filter cascade cheap:
 //! §7.2 needs counts against three different filter contexts at once, which is
