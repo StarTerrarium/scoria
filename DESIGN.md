@@ -652,6 +652,8 @@ The keystroke shown beside an item is read from the keymap, as §8's cheatsheet 
 
 It opens where the click was. `mouse_area`'s right-press carries no position, so the pointer is recorded in the event filter rather than sent as a message -- every message rebuilds the view, and the pointer changes on every pixel of every movement.
 
+**The menu layer is always in the tree, present or not.** iced diffs the widget tree by type, so swapping the root between a container and a stack throws away the state of everything beneath it -- the table's scroll offset included. The scrollable then reset to the top and reported it, and a report of a scroll closes the menu, so the menu destroyed itself on the very next event. It only did that where there was an offset to lose, so a filtered view of a dozen rows worked and the whole library never did. The layer is an empty space when there is no menu, and a scroll only dismisses when the offset actually moved.
+
 **That record is shared across threads, not thread-local.** `listen_with` takes a plain `fn`, so nothing travels in with the closure and it has to reach for something it can name -- and the obvious answer, a thread-local, is wrong: iced's thread-pool feature is on by default, so a subscription runs on a pool thread while `update` and `view` run on the main one. Each sees its own initial value and neither sees the other's writes. The pointer read as the origin and the menu opened in the corner of the window every time. The keymap had the same fault and hid it, because the value the subscription thread never received was the same standard map it had already started with.
 
 ---

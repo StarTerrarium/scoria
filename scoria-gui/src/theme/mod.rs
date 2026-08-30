@@ -622,6 +622,31 @@ impl Theme {
         }
     }
 
+    /// One row of a right-click menu.
+    ///
+    /// A menu row has to light up under the pointer -- it is a list of things
+    /// to choose from, and without it there is no telling which one a click
+    /// will land on. The selected-row colour, because that is exactly what it
+    /// is saying.
+    #[must_use]
+    pub fn menu_item(&self, status: button::Status) -> button::Style {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: hovered.then(|| Background::Color(colour(self.roles.selected_row))),
+            text_color: colour(if hovered {
+                self.roles.selected_row_text
+            } else {
+                self.roles.text
+            }),
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: border::radius(2),
+            },
+            ..button::Style::default()
+        }
+    }
+
     /// The seek bar with nothing to seek through.
     ///
     /// The colour the slider draws the unplayed part of its rail in, so the

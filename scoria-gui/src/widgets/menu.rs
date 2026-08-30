@@ -24,7 +24,9 @@
 use crate::keymap::Keymap;
 use crate::keymap::action::Action;
 use crate::theme::Theme;
-use iced::widget::{Space, column, container, mouse_area, pin, responsive, row, stack, text};
+use iced::widget::{
+    Space, button, column, container, mouse_area, pin, responsive, row, stack, text,
+};
 use iced::{Element, Fill, Length, Point, Size};
 use scoria_core::model::Track;
 
@@ -174,26 +176,24 @@ pub fn view<'a, Message: Clone + 'a>(
                 );
             }
             let accelerator = item.accelerator.clone().unwrap_or_default();
+            // A button rather than a `mouse_area`, because a menu row has to
+            // light up under the pointer and a `mouse_area` cannot say whether
+            // it is hovered. Without it there is no telling which row a click
+            // will land on.
             list = list.push(
-                mouse_area(
-                    container(
-                        row![
-                            text(item.label.clone()).size(13).width(Fill),
-                            text(accelerator).size(11).style(move |_t: &Theme| muted),
-                        ]
-                        .spacing(10)
-                        .align_y(iced::Alignment::Center),
-                    )
-                    .padding([0, 8])
-                    .height(Length::Fixed(ROW_HEIGHT))
-                    .align_y(iced::Alignment::Center)
-                    .width(Fill)
-                    // The panel is a fixed width and an album artist can be
-                    // very long. Cut it rather than let it run past the edge.
-                    .clip(true),
+                button(
+                    row![
+                        text(item.label.clone()).size(13).width(Fill),
+                        text(accelerator).size(11).style(move |_t: &Theme| muted),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center),
                 )
-                .interaction(iced::mouse::Interaction::Pointer)
-                .on_press(on_event(item.event)),
+                .padding([0, 8])
+                .height(Length::Fixed(ROW_HEIGHT))
+                .width(Fill)
+                .on_press(on_event(item.event))
+                .style(|t: &Theme, status| t.menu_item(status)),
             );
         }
 

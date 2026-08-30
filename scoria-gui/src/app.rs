@@ -16,7 +16,7 @@ use crate::settings::Settings;
 use crate::theme::Theme;
 use crate::widgets::columns::Column;
 use crate::widgets::{menu, panes, table, transport, welcome};
-use iced::widget::{button, container, row, text, text_input};
+use iced::widget::{Space, button, container, row, text, text_input};
 use iced::{Element, Fill, Length, Subscription, Task};
 use scoria_core::command::Command;
 use scoria_core::config::Paths;
@@ -543,9 +543,14 @@ impl App {
                 }
             }
             table::Event::Scrolled { offset, viewport } => {
-                // The menu was opened on a row, and the row has moved out from
-                // under it.
-                self.menu = None;
+                // A *real* scroll dismisses the menu, because the row it was
+                // opened on has moved out from under it. Being told the offset
+                // it already had does not: a relayout can report that, and the
+                // menu vanishing because the table was rebuilt underneath it
+                // is precisely how this used to fail.
+                if (offset - self.scroll_offset).abs() > f32::EPSILON {
+                    self.menu = None;
+                }
                 self.scroll_offset = offset;
                 self.viewport_height = viewport;
             }
@@ -1602,27 +1607,37 @@ impl App {
         // everything, the transport included: unlike §9's drawers this is a
         // momentary thing at the pointer, and a menu the window can clip is a
         // menu with items nobody can choose.
-        match self.menu.as_ref().and_then(|open| {
+        let open = self.menu.as_ref().and_then(|open| {
             self.track(open.track)
                 .map(|track| (menu::items(track, &self.keymap), open.at))
-        }) {
-            Some((items, at)) => iced::widget::stack![
-                window,
-                // Opaque for the reason `layouts::arrange` wraps its overlay:
-                // a layer that is not stops mouse events reaching it alone,
-                // and lets them through to the rows underneath.
+        });
+
+        // **Always a stack, menu or no menu.**
+        //
+        // iced diffs the widget tree by type, so swapping the root between a
+        // container and a stack throws away the state of everything under it
+        // -- including the table's scroll offset. The scrollable then reset to
+        // the top and reported it, and `Scrolled` closes the menu, so the menu
+        // destroyed itself on the very next event.
+        //
+        // It only did that when there was an offset to lose, which is why a
+        // filtered view of eleven rows worked and the whole library never did.
+        //
+        // Opaque for the reason `layouts::arrange` wraps its overlay: a layer
+        // that is not lets mouse events through to the rows underneath. Both
+        // lengths for the reason that one is `Shrink` by default, which sets
+        // the limits compressing and collapses every `Fill` inside.
+        let layer: Element<'_, Message, Theme> = match open {
+            Some((items, at)) => {
                 iced::widget::opaque(menu::view(items, at, &self.theme, Message::Menu))
-            ]
-            // Both, and not optional. A `Stack` does not inspect its children
-            // for a sizing strategy -- its own default is `Shrink`, which sets
-            // the limits compressing, and every `Fill` inside then resolves to
-            // its content rather than to the window. The menu collapsed to
-            // nothing and drew nothing, which is exactly what it looked like.
+            }
+            None => Space::new().width(0).height(0).into(),
+        };
+
+        iced::widget::stack![window, layer]
             .width(Fill)
             .height(Fill)
-            .into(),
-            None => window,
-        }
+            .into()
     }
 
     fn overlay_content(&self, overlay: Overlay) -> Element<'_, Message, Theme> {
@@ -2068,6 +2083,32 @@ mod tests {
 
         let _ = app.on_action(Action::Dismiss);
         assert_eq!(app.open_overlay_kind(), None, "a second escape did nothing");
+    }
+
+    #[test]
+    fn being_told_the_offset_it_already_had_does_not_dismiss_the_menu() {
+        // The second guard on the bug that made this work on a filtered view
+        // and never on the whole library. Rebuilding the widget tree reset the
+        // scrollable, which reported offset 0, which closed the menu on the
+        // very next event. The tree is stable now; this makes a spurious
+        // report harmless even if something else ever produces one.
+        let mut app = App::disconnected(String::new());
+        app.rows = vec![TrackId(11)];
+        app.on_table(table::Event::Scrolled {
+            offset: 0.0,
+            viewport: 600.0,
+        });
+        app.on_table(table::Event::Context(0));
+        assert!(app.menu.is_some());
+
+        app.on_table(table::Event::Scrolled {
+            offset: 0.0,
+            viewport: 600.0,
+        });
+        assert!(
+            app.menu.is_some(),
+            "a relayout reporting the same offset closed the menu"
+        );
     }
 
     #[test]
