@@ -10,7 +10,7 @@
 //! `scripts/check-boundaries.sh` checks for.
 
 use crate::theme::Theme;
-use iced::widget::{column, container};
+use iced::widget::{Space, column, container};
 use iced::{Element, Fill, Length};
 use serde::{Deserialize, Serialize};
 
@@ -184,13 +184,23 @@ pub fn arrange<'a, Message: 'a>(
     // The overlay covers the explorer -- search field, panes and table -- and
     // stops at the transport.
     let explorer = column![search, body].width(Fill).height(Fill);
-    let explorer: Element<'a, Message, Theme> = match overlay {
-        Some(layer) => iced::widget::stack![explorer, iced::widget::opaque(layer)]
-            .width(Fill)
-            .height(Fill)
-            .into(),
-        None => explorer.into(),
+
+    // **The layer is always here, overlay or not.**
+    //
+    // iced diffs the widget tree by type, so swapping this between a column
+    // and a stack throws away the state of everything beneath it -- including
+    // the table's scroll offset. Opening any overlay sent the explorer back to
+    // the top, and the further you had scrolled the more it took away.
+    //
+    // Nothing about the overlay is conditional any more except what is in it.
+    let layer: Element<'a, Message, Theme> = match overlay {
+        Some(layer) => iced::widget::opaque(layer),
+        None => Space::new().width(0).height(0).into(),
     };
+    let explorer: Element<'a, Message, Theme> = iced::widget::stack![explorer, layer]
+        .width(Fill)
+        .height(Fill)
+        .into();
 
     let style = theme.window_style();
     container(column![explorer, transport].width(Fill).height(Fill))

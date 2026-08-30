@@ -178,6 +178,21 @@ this file, add a check for it there too.
 
 **Every sort chain ends in a `TrackId` tiebreaker** so equal-key rows are stable across runs.
 
+**A layer in a `stack!` is always there, present or absent.** iced diffs the
+widget tree by type, so returning a `column` when a layer is not needed and a
+`stack` when it is changes the type of that node -- and everything beneath it
+is rebuilt from scratch, losing its state. In practice that means the table's
+scroll offset: the explorer jumped to the top when any overlay opened, when a
+column edge was grabbed, and when a track's menu opened. Three separate
+versions of one mistake.
+
+So the stack is unconditional and the *layer* is what varies, with
+`Space::new().width(0).height(0)` standing in for nothing. `layouts::arrange`,
+`widgets/table.rs` and `App::view` all do this; copy one of them.
+
+The symptom is worth recognising, because it does not look like a tree
+problem: something scrolls to the top on its own.
+
 **Errors:** `thiserror` in `scoria-core`, `anyhow` at binary boundaries.
 
 **There must be no known way for the application to panic at runtime.** This is

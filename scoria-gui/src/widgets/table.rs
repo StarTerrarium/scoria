@@ -271,9 +271,7 @@ pub fn view<'a, Message: Clone + 'a>(
     });
 
     let table_body = column![header_row, body].width(Fill).height(Fill);
-    if !resizing && reordering.is_none() {
-        return table_body.into();
-    }
+    let dragging = resizing || reordering.is_some();
 
     // While dragging, a transparent sheet follows the pointer wherever it goes.
     // Without it the drag stops the moment the cursor leaves a six-pixel gap.
@@ -317,6 +315,16 @@ pub fn view<'a, Message: Clone + 'a>(
             }))
             .into()
     });
+    // Stacked whether or not a drag is in progress, and for the reason
+    // `layouts` keeps its overlay layer: returning the column on its own and
+    // the stack while dragging changes the type of this widget, and iced diffs
+    // the tree by type -- so grabbing a column edge would throw away the
+    // scrollable underneath and send the table back to the top.
+    let catcher: Element<'a, Message, Theme> = if dragging {
+        catcher.into()
+    } else {
+        Space::new().width(0).height(0).into()
+    };
     iced::widget::stack![table_body, catcher]
         .width(Fill)
         .height(Fill)
