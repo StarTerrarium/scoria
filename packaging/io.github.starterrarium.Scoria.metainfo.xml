@@ -14,6 +14,12 @@
 
   <description>
     <p>
+      Written entirely by AI. No part of Scoria was written by hand: the code,
+      the tests and the documentation were all produced by Claude Code, directed
+      but not line-by-line reviewed by its author. If you are not comfortable
+      running AI-written software, do not install this.
+    </p>
+    <p>
       Most players are playlist-centric and treat the library as a source to
       build playlists from. Scoria inverts that: the library is the primary
       object, and you navigate it directly. It is aimed at someone with a

@@ -10,6 +10,35 @@ configuration.
 It is aimed at someone with a well-organised local library who listens to whole
 albums and wants to see a lot of information at once.
 
+---
+
+## ⚠️ Every line of this was written by AI
+
+**No part of Scoria was written by hand.** The architecture, the audio pipeline,
+the database schema, the query engine, the tests, the commit messages and this
+README were all written by [Claude Code](https://claude.com/claude-code). My part
+was direction, design decisions and using the thing. **I did not review every
+diff** -- [`CLAUDE.md`](CLAUDE.md) says so in as many words, and it is why that
+file leans on enforced structure rather than on review.
+
+It started as an experiment to see how far the tools would go. It turned into the
+music player I use every day, and that is the only reason it is published instead
+of sitting in a folder.
+
+**If you are not comfortable running AI-written code, don't run this.** That is a
+completely reasonable position. I would want to know before installing something,
+and I would probably decline -- so it is at the top of the README rather than
+buried in the credits, and I would rather you close the tab than find out later.
+
+For whatever it is worth when you are deciding: there is no known way for it to
+panic, `unsafe` is forbidden, it cannot reach the network, and 480 tests plus
+[`scripts/check-boundaries.sh`](scripts/check-boundaries.sh) run on every push.
+Those are guardrails against the failure modes this way of working actually has,
+not a claim that a human reviewed it line by line. Nobody did. Read it yourself,
+or don't run it.
+
+---
+
 > **Status: 1.0.** Scanning and watching, three layouts, gapless playback,
 > shuffle and repeat, ReplayGain, artwork, the queue, search and filtering,
 > settings, and the desktop's media keys. Playlists, tag editing, vim bindings
