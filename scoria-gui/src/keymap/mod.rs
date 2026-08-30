@@ -118,6 +118,31 @@ impl Mods {
             alt: modifiers.alt(),
         }
     }
+
+    /// The modifiers that actually distinguish a binding on this trigger.
+    ///
+    /// **Shift is not a modifier on a character.** It is how the character was
+    /// produced: `?` is Shift+`/` on most layouts, `@` is Shift+`2` on some
+    /// and Shift+`'` on others, and either way what arrives is the character.
+    /// Requiring shift to be *absent* means binding `?` binds something nobody
+    /// can type -- which is exactly what had happened, so `?` never opened the
+    /// cheatsheet and only F1 did.
+    ///
+    /// Discarding it also loses nothing that was not already lost:
+    /// [`Trigger::from_iced`] folds case, so `Shift+f` and `f` were the same
+    /// trigger before they were the same binding.
+    ///
+    /// Named keys keep shift, because there it is a real modifier and not a
+    /// way of typing something else -- Shift+Down extends a selection.
+    const fn distinguishing(self, trigger: &Trigger) -> Self {
+        match trigger {
+            Trigger::Char(_) => Self {
+                shift: false,
+                ..self
+            },
+            _ => self,
+        }
+    }
 }
 
 impl Trigger {
@@ -214,9 +239,10 @@ impl Keymap {
     /// Resolves a key press.
     #[must_use]
     pub fn resolve(&self, trigger: &Trigger, mods: Mods) -> Option<Action> {
+        let wanted = mods.distinguishing(trigger);
         self.bindings
             .iter()
-            .find(|b| b.trigger == *trigger && b.mods == mods)
+            .find(|b| b.trigger == *trigger && b.mods.distinguishing(trigger) == wanted)
             .map(|b| b.action)
     }
 
@@ -324,6 +350,48 @@ mod tests {
     }
 
     #[test]
+    fn a_shifted_character_reaches_its_binding() {
+        // `?` never opened the cheatsheet. It is bound with no modifiers, and
+        // producing it means holding shift on essentially every layout, so the
+        // binding described a keypress nobody could make. Only F1 worked, and
+        // §8 says the cheatsheet opens on `?`.
+        let keymap = Keymap::standard();
+        assert_eq!(
+            keymap.resolve_iced(&Key::Character("?".into()), Modifiers::SHIFT),
+            Some(Action::ToggleHelp),
+            "shift-? did not reach the help"
+        );
+    }
+
+    #[test]
+    fn shift_still_matters_on_a_named_key() {
+        // The rule is about characters, where shift is how you typed them.
+        // On an arrow it is a modifier like any other, and §7.3's selection
+        // model needs the difference.
+        let keymap = Keymap::standard();
+        assert_eq!(
+            keymap.resolve(&Trigger::Down, Mods::NONE),
+            Some(Action::MoveDown)
+        );
+        assert_eq!(
+            keymap.resolve(&Trigger::Down, Mods::SHIFT),
+            Some(Action::ExtendDown)
+        );
+    }
+
+    #[test]
+    fn a_character_binding_ignores_shift_but_not_control() {
+        // Discarding shift must not discard the rest: Ctrl+S is shuffle and a
+        // bare `s` is nothing.
+        let keymap = Keymap::standard();
+        assert_eq!(
+            keymap.resolve(&Trigger::Char('s'), Mods::CTRL),
+            Some(Action::ToggleShuffle)
+        );
+        assert_eq!(keymap.resolve(&Trigger::Char('s'), Mods::NONE), None);
+    }
+
+    #[test]
     fn an_unbound_key_resolves_to_nothing() {
         assert_eq!(
             Keymap::standard().resolve(&Trigger::Char('z'), Mods::NONE),
@@ -364,11 +432,15 @@ mod tests {
     #[test]
     fn no_two_standard_bindings_collide() {
         // A shadowed binding is a binding that silently does nothing.
+        // Compared the way resolution compares them: two character bindings
+        // that differ only in shift are one binding, because shift is not a
+        // modifier on a character.
         let keymap = Keymap::standard();
         let mut seen = std::collections::HashSet::new();
         for binding in &keymap.bindings {
+            let mods = binding.mods.distinguishing(&binding.trigger);
             assert!(
-                seen.insert((binding.trigger.clone(), binding.mods)),
+                seen.insert((binding.trigger.clone(), mods)),
                 "{:?}+{:?} is bound twice",
                 binding.mods,
                 binding.trigger
