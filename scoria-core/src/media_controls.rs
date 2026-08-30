@@ -51,7 +51,7 @@ impl MediaBridge {
     ///
     /// # Errors
     ///
-    /// [`CoreError::Database`] if the platform's controls are unavailable --
+    /// [`CoreError::Desktop`] if the platform's controls are unavailable --
     /// no session bus, or a desktop with no MPRIS support. That is a normal
     /// thing to run into and not a reason to fail to start.
     pub fn new() -> Result<Self, CoreError> {
@@ -61,9 +61,8 @@ impl MediaBridge {
             hwnd: None,
         };
 
-        let mut controls = MediaControls::new(config).map_err(|e| {
-            CoreError::Database(format!("cannot reach the desktop controls: {e:?}"))
-        })?;
+        let mut controls = MediaControls::new(config)
+            .map_err(|e| CoreError::Desktop(format!("cannot reach the desktop controls: {e:?}")))?;
 
         let (sender, commands) = channel();
         controls
@@ -75,7 +74,7 @@ impl MediaBridge {
                 }
             })
             .map_err(|e| {
-                CoreError::Database(format!("cannot attach to the desktop controls: {e:?}"))
+                CoreError::Desktop(format!("cannot attach to the desktop controls: {e:?}"))
             })?;
 
         Ok(Self {

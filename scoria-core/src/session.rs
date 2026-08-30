@@ -202,7 +202,7 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// [`CoreError::Database`] if the platform's controls cannot be reached.
+    /// [`CoreError::Desktop`] if the platform's controls cannot be reached.
     pub fn start_media_controls(&mut self) -> Result<(), CoreError> {
         if self.media.is_none() {
             self.media = Some(MediaBridge::new()?);
@@ -350,7 +350,7 @@ impl Session {
     /// # Errors
     ///
     /// [`CoreError::NoLibraryRoot`] if no root is configured, or
-    /// [`CoreError::Database`] if the platform watcher cannot be created.
+    /// [`CoreError::Scan`] if the platform watcher cannot be created.
     pub fn watch(&self) -> Result<LibraryWatcher, CoreError> {
         LibraryWatcher::watch(self.config.root()?)
     }
@@ -371,8 +371,8 @@ impl Session {
     /// # Errors
     ///
     /// [`CoreError::NoLibraryRoot`] if no root is configured, or
-    /// [`CoreError::Database`] if the watcher or the second database handle
-    /// cannot be opened.
+    /// [`CoreError::Scan`] if the watcher cannot be started, or
+    /// [`CoreError::Database`] if the second database handle cannot be opened.
     pub fn start_watching(&mut self) -> Result<(), CoreError> {
         // Recorded before the root is looked up, so that a refusal for want of
         // one is still a standing request. [`Session::set_root`] honours it.
@@ -449,7 +449,7 @@ impl Session {
                     let _ = events.send(Event::ScanFinished);
                 }
             })
-            .map_err(|e| CoreError::Database(format!("cannot start the scan thread: {e}")))?;
+            .map_err(|e| CoreError::Scan(format!("cannot start the scan thread: {e}")))?;
 
         self.watcher = Some(WatchHandle {
             stop,
@@ -463,15 +463,15 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// [`CoreError::Database`] if watching was never started or the thread has
+    /// [`CoreError::Scan`] if watching was never started or the thread has
     /// stopped.
     pub fn request_rescan(&self) -> Result<(), CoreError> {
         match &self.watcher {
             Some(handle) => handle
                 .rescan
                 .send(())
-                .map_err(|_| CoreError::Database("the scan thread has stopped".to_owned())),
-            None => Err(CoreError::Database(
+                .map_err(|_| CoreError::Scan("the scan thread has stopped".to_owned())),
+            None => Err(CoreError::Scan(
                 "library watching is not running".to_owned(),
             )),
         }
@@ -630,7 +630,7 @@ impl Session {
         self.ensure_playback()?;
         match &self.playback {
             Some(handle) => handle.send(command),
-            None => Err(CoreError::Database("playback is not running".to_owned())),
+            None => Err(CoreError::Audio("playback is not running".to_owned())),
         }
     }
 
@@ -654,7 +654,7 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// [`CoreError::Database`] if the thread cannot be started.
+    /// [`CoreError::Audio`] if the audio thread cannot be started.
     pub fn start_playback(&mut self, backend: Box<dyn AudioBackend>) -> Result<(), CoreError> {
         let resolver = Arc::new(IndexResolver::new(self.index.clone(), self.library_root()?));
         self.playback = Some(spawn(backend, resolver, self.events.clone())?);
@@ -725,7 +725,7 @@ impl Session {
     /// # Errors
     ///
     /// [`CoreError::Config`] if settings cannot be written, or
-    /// [`CoreError::Database`] if watching cannot be restarted.
+    /// [`CoreError::Scan`] if watching cannot be restarted.
     pub fn set_root(&mut self, root: PathBuf) -> Result<(), CoreError> {
         self.config.root = Some(root);
         crate::config::save_library(&self.paths.config_file(), &self.config)?;

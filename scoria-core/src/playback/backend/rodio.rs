@@ -59,12 +59,12 @@ impl RodioBackend {
     ///
     /// # Errors
     ///
-    /// [`CoreError::Database`] if no output device is available or it cannot be
+    /// [`CoreError::Audio`] if no output device is available or it cannot be
     /// configured. A machine with no sound card is a normal thing to run into,
     /// not a reason to abort.
     pub fn open() -> Result<Self, CoreError> {
         let mut device = DeviceSinkBuilder::open_default_sink()
-            .map_err(|e| CoreError::Database(format!("cannot open audio output: {e}")))?;
+            .map_err(|e| CoreError::Audio(format!("cannot open audio output: {e}")))?;
         // rodio prints a paragraph to stderr when the sink drops. Shutting down
         // is not an event a library should narrate to the user's terminal.
         device.log_on_drop(false);
@@ -79,9 +79,8 @@ impl RodioBackend {
 
     /// Opens a file and wraps it with its own gain and a cancel switch.
     fn append(&mut self, track: &TrackRef, gain_db: f32) -> Result<(), CoreError> {
-        let file = File::open(&track.path).map_err(|e| {
-            CoreError::Database(format!("cannot open {}: {e}", track.path.display()))
-        })?;
+        let file = File::open(&track.path)
+            .map_err(|e| CoreError::Audio(format!("cannot open {}: {e}", track.path.display())))?;
 
         // The byte length is what makes the stream seekable. `Decoder::new`
         // declares neither, so Symphonia treats the input as a stream it cannot
@@ -105,7 +104,7 @@ impl RodioBackend {
         }
 
         let decoder = builder.build().map_err(|e| {
-            CoreError::Database(format!("cannot decode {}: {e}", track.path.display()))
+            CoreError::Audio(format!("cannot decode {}: {e}", track.path.display()))
         })?;
 
         // Gain rides on the source rather than on the player, because the
@@ -183,7 +182,7 @@ impl AudioBackend for RodioBackend {
     fn seek(&mut self, position: Duration) -> Result<(), CoreError> {
         self.player
             .try_seek(position)
-            .map_err(|e| CoreError::Database(format!("cannot seek: {e}")))
+            .map_err(|e| CoreError::Audio(format!("cannot seek: {e}")))
     }
 
     fn set_volume(&mut self, linear: f32) {

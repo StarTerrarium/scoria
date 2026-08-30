@@ -97,11 +97,11 @@ impl PlaybackHandle {
     ///
     /// # Errors
     ///
-    /// [`CoreError::Database`] if the audio thread has stopped.
+    /// [`CoreError::Audio`] if the audio thread has stopped.
     pub fn send(&self, command: EngineCommand) -> Result<(), CoreError> {
         self.commands
             .send(command)
-            .map_err(|_| CoreError::Database("the audio thread has stopped".to_owned()))
+            .map_err(|_| CoreError::Audio("the audio thread has stopped".to_owned()))
     }
 }
 
@@ -124,7 +124,7 @@ impl Drop for PlaybackHandle {
 ///
 /// # Errors
 ///
-/// [`CoreError::Database`] if the thread cannot be spawned.
+/// [`CoreError::Audio`] if the thread cannot be spawned.
 pub fn spawn(
     backend: Box<dyn AudioBackend>,
     resolver: Arc<dyn TrackResolver>,
@@ -146,13 +146,13 @@ pub fn spawn(
                 Engine::new(backend, resolver, event_tx).run(&command_rx);
             }));
             if result.is_err() {
-                let _ = events.send(Event::Error(CoreError::Database(
+                let _ = events.send(Event::Error(CoreError::Audio(
                     "the audio thread stopped unexpectedly; playback has ended".to_owned(),
                 )));
                 let _ = events.send(Event::PlaybackStateChanged(PlaybackState::Stopped));
             }
         })
-        .map_err(|e| CoreError::Database(format!("cannot start the audio thread: {e}")))?;
+        .map_err(|e| CoreError::Audio(format!("cannot start the audio thread: {e}")))?;
 
     Ok(PlaybackHandle {
         commands: command_tx,

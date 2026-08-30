@@ -150,7 +150,7 @@ impl AudioBackend for MockBackend {
     fn play(&mut self, track: &TrackRef, gain_db: f32) -> Result<(), CoreError> {
         let mut state = self.control.lock();
         if state.unplayable.contains(&track.id) {
-            return Err(CoreError::Database(format!(
+            return Err(CoreError::Audio(format!(
                 "mock: {} is unplayable",
                 track.id
             )));
@@ -166,7 +166,7 @@ impl AudioBackend for MockBackend {
     fn preload_next(&mut self, track: &TrackRef, gain_db: f32) -> Result<(), CoreError> {
         let mut state = self.control.lock();
         if state.unplayable.contains(&track.id) {
-            return Err(CoreError::Database(format!(
+            return Err(CoreError::Audio(format!(
                 "mock: {} is unplayable",
                 track.id
             )));

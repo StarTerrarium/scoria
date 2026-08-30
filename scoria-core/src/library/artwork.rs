@@ -206,10 +206,10 @@ impl ArtworkCache {
     ///
     /// # Errors
     ///
-    /// [`CoreError::Database`] if the cache directory cannot be written.
+    /// [`CoreError::Io`] if the cache directory cannot be written.
     pub fn store(&self, album: &ArtworkKey, artwork: &Artwork) -> Result<PathBuf, CoreError> {
         std::fs::create_dir_all(&self.directory).map_err(|e| {
-            CoreError::Database(format!("cannot create {}: {e}", self.directory.display()))
+            CoreError::Io(format!("cannot create {}: {e}", self.directory.display()))
         })?;
 
         // An album whose art changed from PNG to JPEG would otherwise keep both,
@@ -229,17 +229,15 @@ impl ArtworkCache {
                             .copied()
                     })
                     .unwrap_or("jpg");
-                let data = std::fs::read(path).map_err(|e| {
-                    CoreError::Database(format!("cannot read {}: {e}", path.display()))
-                })?;
+                let data = std::fs::read(path)
+                    .map_err(|e| CoreError::Io(format!("cannot read {}: {e}", path.display())))?;
                 (extension, data)
             }
         };
 
         let destination = self.directory.join(format!("{album}.{extension}"));
-        std::fs::write(&destination, data).map_err(|e| {
-            CoreError::Database(format!("cannot write {}: {e}", destination.display()))
-        })?;
+        std::fs::write(&destination, data)
+            .map_err(|e| CoreError::Io(format!("cannot write {}: {e}", destination.display())))?;
         Ok(destination)
     }
 
@@ -251,7 +249,7 @@ impl ArtworkCache {
     ///
     /// # Errors
     ///
-    /// [`CoreError::Database`] if the directory cannot be read or a file cannot
+    /// [`CoreError::Io`] if the directory cannot be read or a file cannot
     /// be removed.
     pub fn retain(&self, keep: &HashSet<ArtworkKey>) -> Result<usize, CoreError> {
         let entries = match std::fs::read_dir(&self.directory) {
@@ -259,7 +257,7 @@ impl ArtworkCache {
             // Nothing cached yet is not a failure to prune.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
             Err(e) => {
-                return Err(CoreError::Database(format!(
+                return Err(CoreError::Io(format!(
                     "cannot read {}: {e}",
                     self.directory.display()
                 )));
@@ -286,7 +284,7 @@ impl ArtworkCache {
     ///
     /// # Errors
     ///
-    /// [`CoreError::Database`] if a cached file exists but cannot be removed.
+    /// [`CoreError::Io`] if a cached file exists but cannot be removed.
     pub fn forget(&self, album: &ArtworkKey) -> Result<(), CoreError> {
         for extension in SIDECAR_EXTENSIONS {
             let path = self.directory.join(format!("{album}.{extension}"));
@@ -294,7 +292,7 @@ impl ArtworkCache {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
-                    return Err(CoreError::Database(format!(
+                    return Err(CoreError::Io(format!(
                         "cannot remove {}: {e}",
                         path.display()
                     )));

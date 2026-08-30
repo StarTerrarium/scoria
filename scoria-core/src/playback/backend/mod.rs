@@ -50,7 +50,7 @@ pub trait AudioBackend: Send {
     /// gain" stops being a well-defined property of the backend.
     ///
     /// # Errors
-    /// [`CoreError::Database`] if the file cannot be opened or decoded.
+    /// [`CoreError::Audio`] if the file cannot be opened or decoded.
     fn play(&mut self, track: &TrackRef, gain_db: f32) -> Result<(), CoreError>;
 
     /// Queues the following track so it begins without a gap.
@@ -60,7 +60,7 @@ pub trait AudioBackend: Send {
     /// queueing rather than gapless.
     ///
     /// # Errors
-    /// [`CoreError::Database`] if the file cannot be opened or decoded.
+    /// [`CoreError::Audio`] if the file cannot be opened or decoded.
     fn preload_next(&mut self, track: &TrackRef, gain_db: f32) -> Result<(), CoreError>;
 
     /// Discards anything queued but not yet playing, because what plays next
@@ -74,7 +74,7 @@ pub trait AudioBackend: Send {
     fn stop(&mut self);
 
     /// # Errors
-    /// [`CoreError::Database`] if the backend cannot seek this stream.
+    /// [`CoreError::Audio`] if the backend cannot seek this stream.
     fn seek(&mut self, position: Duration) -> Result<(), CoreError>;
 
     /// User-facing volume as a linear amplitude, 0.0 to 1.0.

@@ -48,7 +48,7 @@ impl LibraryWatcher {
     ///
     /// # Errors
     ///
-    /// [`CoreError::Database`] if the platform watcher cannot be created or the
+    /// [`CoreError::Scan`] if the platform watcher cannot be created or the
     /// root cannot be watched.
     pub fn watch(root: &Path) -> Result<Self, CoreError> {
         let (sender, events) = channel();
@@ -60,11 +60,11 @@ impl LibraryWatcher {
                 let _ = sender.send(event);
             }
         })
-        .map_err(|e| CoreError::Database(format!("cannot create watcher: {e}")))?;
+        .map_err(|e| CoreError::Scan(format!("cannot create watcher: {e}")))?;
 
         watcher
             .watch(root, RecursiveMode::Recursive)
-            .map_err(|e| CoreError::Database(format!("cannot watch {}: {e}", root.display())))?;
+            .map_err(|e| CoreError::Scan(format!("cannot watch {}: {e}", root.display())))?;
 
         Ok(Self {
             _watcher: watcher,
