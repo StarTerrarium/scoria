@@ -92,16 +92,6 @@ pub trait TrackRepository {
     /// stored row cannot be represented by the model.
     fn track(&self, id: TrackId) -> Result<Option<Track>, CoreError>;
 
-    /// Fetches many, preserving the caller's order and skipping ids that are
-    /// no longer present.
-    ///
-    /// Order matters: the queue overlay renders a snapshot in snapshot order,
-    /// and a repository that returned storage order would silently reorder it.
-    ///
-    /// # Errors
-    /// As [`Self::track`].
-    fn tracks_by_ids(&self, ids: &[TrackId]) -> Result<Vec<Track>, CoreError>;
-
     /// # Errors
     /// As [`Self::track`].
     fn track_by_path(&self, path: &RelativePath) -> Result<Option<Track>, CoreError>;
@@ -142,12 +132,28 @@ pub trait TrackRepository {
     /// As [`Self::track`].
     fn all_track_paths(&self) -> Result<Vec<(TrackId, RelativePath)>, CoreError>;
 
-    /// Removes tracks outright. Used when a library is rescanned from scratch,
-    /// not when a file merely goes missing.
+    /// Removes tracks outright.
+    ///
+    /// Not what happens when a file goes missing -- §7.4 marks those and keeps
+    /// the row. In practice a track row is only ever removed by the cascade
+    /// from [`AlbumRepository::remove_empty_albums`]; this is here so the
+    /// repository can express deletion at all, and so the schema's cascade and
+    /// full-text triggers can be exercised.
     ///
     /// # Errors
     /// [`CoreError::Database`] on failure.
     fn delete_tracks(&mut self, ids: &[TrackId]) -> Result<(), CoreError>;
+
+    /// The tracks currently marked missing (§7.4).
+    ///
+    /// A query of its own because the scanner wants the ids and nothing else.
+    /// Reading every row to filter them costs the half-second that
+    /// [`LibraryIndex`](crate::query::index::LibraryIndex) exists to avoid,
+    /// and the scanner was paying it on every pass.
+    ///
+    /// # Errors
+    /// [`CoreError::Database`] on failure.
+    fn unavailable_track_ids(&self) -> Result<Vec<TrackId>, CoreError>;
 
     /// Full-text search, most relevant first.
     ///

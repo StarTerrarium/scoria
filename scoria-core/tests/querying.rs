@@ -144,6 +144,37 @@ fn artist_labels(outcome: &scoria_core::QueryOutcome) -> Vec<(String, usize)> {
 // ------------------------------------------------------------ the basics --
 
 #[test]
+fn resolving_ids_preserves_the_callers_order() {
+    // A playback snapshot is an ordered list, and the queue overlay draws it
+    // in snapshot order. Anything that resolved ids in its own order would
+    // silently reorder what is playing, which is what §6.2 exists to prevent.
+    let library = Library::new();
+    let index = library.index();
+    let all: Vec<scoria_core::TrackId> = index.tracks().iter().map(|t| t.id).collect();
+
+    let requested = vec![all[3], all[0], all[4], all[1]];
+    let resolved = index.rows(&requested);
+    assert_eq!(
+        resolved.iter().map(|t| t.id).collect::<Vec<_>>(),
+        requested,
+        "the order asked for is the order that plays"
+    );
+}
+
+#[test]
+fn resolving_ids_skips_ones_that_are_gone_without_failing() {
+    // A snapshot outlives the library it was taken from: §6.2 keeps playing
+    // what it captured, and a rescan can remove a row underneath it.
+    let library = Library::new();
+    let index = library.index();
+    let present = index.tracks().first().map(|t| t.id).unwrap();
+
+    let resolved = index.rows(&[present, scoria_core::TrackId(9999)]);
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved.first().map(|t| t.id), Some(present));
+}
+
+#[test]
 fn an_unfiltered_selection_returns_the_whole_library() {
     let library = Library::new();
     let outcome = library.run(&Selection::all());

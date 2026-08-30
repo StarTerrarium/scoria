@@ -292,37 +292,6 @@ fn albums_can_be_looked_up_by_identity() {
 }
 
 #[test]
-fn fetching_many_tracks_preserves_the_callers_order() {
-    // A playback snapshot is an ordered list. A repository that returned
-    // storage order would silently reorder it, which is exactly what §6.2
-    // exists to prevent.
-    let mut db = db();
-    let album_id = album(&mut db, "Artist", "Album", "2020");
-    let ids: Vec<TrackId> = (1..=5)
-        .map(|n| {
-            db.upsert_track(&new_track(album_id, &format!("a/b/{n}.flac"), "t"))
-                .unwrap()
-        })
-        .collect();
-
-    let requested = vec![ids[3], ids[0], ids[4], ids[1]];
-    let fetched = db.tracks_by_ids(&requested).unwrap();
-    assert_eq!(fetched.iter().map(|t| t.id).collect::<Vec<_>>(), requested);
-}
-
-#[test]
-fn fetching_many_skips_ids_that_are_gone_without_failing() {
-    let mut db = db();
-    let album_id = album(&mut db, "Artist", "Album", "2020");
-    let id = db
-        .upsert_track(&new_track(album_id, "a/b/1.flac", "t"))
-        .unwrap();
-
-    let fetched = db.tracks_by_ids(&[id, TrackId(9999)]).unwrap();
-    assert_eq!(fetched.len(), 1);
-}
-
-#[test]
 fn missing_files_are_marked_unavailable_not_deleted() {
     // §7.4: silently dropping rows makes users doubt the software.
     let mut db = db();

@@ -146,7 +146,7 @@ impl<'a> Scanner<'a> {
             .into_iter()
             .map(|(id, path)| (path, id))
             .collect();
-        let previously_unavailable = self.unavailable_ids(repository)?;
+        let previously_unavailable = repository.unavailable_track_ids()?;
 
         let mut outcome = ScanOutcome::default();
         let mut albums: HashMap<String, AlbumId> = HashMap::new();
@@ -267,18 +267,6 @@ impl<'a> Scanner<'a> {
             total,
         });
         Ok(outcome)
-    }
-
-    fn unavailable_ids<R: TrackRepository>(
-        &self,
-        repository: &R,
-    ) -> Result<Vec<TrackId>, CoreError> {
-        Ok(repository
-            .all_tracks()?
-            .into_iter()
-            .filter(|t| !t.available)
-            .map(|t| t.id)
-            .collect())
     }
 
     fn flush<R: TrackRepository>(

@@ -352,19 +352,6 @@ impl TrackRepository for SqliteDatabase {
             .transpose()
     }
 
-    fn tracks_by_ids(&self, ids: &[TrackId]) -> Result<Vec<Track>, CoreError> {
-        // Fetched individually and reassembled in the caller's order. A single
-        // `IN (...)` query would return storage order, which would silently
-        // reorder a playback snapshot -- the one thing §6.2 exists to prevent.
-        let mut tracks = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(track) = self.track(*id)? {
-                tracks.push(track);
-            }
-        }
-        Ok(tracks)
-    }
-
     fn track_by_path(&self, path: &RelativePath) -> Result<Option<Track>, CoreError> {
         let sql = format!("SELECT {TRACK_COLUMNS} FROM tracks WHERE path = ?1");
         self.conn
@@ -477,6 +464,24 @@ impl TrackRepository for SqliteDatabase {
         transaction
             .commit()
             .map_err(db_err("cannot commit deletion"))
+    }
+
+    fn unavailable_track_ids(&self) -> Result<Vec<TrackId>, CoreError> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT id FROM tracks WHERE available = 0")
+            .map_err(db_err("cannot prepare availability query"))?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, i64>(0))
+            .map_err(db_err("cannot list unavailable tracks"))?;
+
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(TrackId(
+                row.map_err(db_err("cannot read an id"))?.cast_unsigned(),
+            ));
+        }
+        Ok(ids)
     }
 
     fn search_tracks(&self, query: &str) -> Result<Vec<TrackId>, CoreError> {
