@@ -56,7 +56,12 @@ const SLIDER_HEIGHT: f32 = 16.0;
 /// the row happened to be -- the artwork -- which meant the artwork could not
 /// grow at all without taking the bar with it, and the six pixels of padding
 /// above and below were room it was not allowed to use.
-const BAR_HEIGHT: f32 = 52.0;
+///
+/// The artwork is the reason this number is what it is. Filling the old bar
+/// took it to 48px and that was still small for the one picture the interface
+/// shows; the bar is taller so the art can be. Everything else in the row
+/// simply centres in whatever it is given, so this is the only number.
+const BAR_HEIGHT: f32 = 64.0;
 
 /// What separates the artwork from the bar's edges.
 ///
