@@ -603,6 +603,25 @@ impl Theme {
         }
     }
 
+    /// The panel a right-click menu is drawn on.
+    ///
+    /// Lifted rather than recessed: it sits above the table for a moment and
+    /// then goes, so it wants an edge and a background that separate it from
+    /// the rows underneath rather than blending into them.
+    #[must_use]
+    pub fn menu_style(&self) -> container::Style {
+        container::Style {
+            background: Some(Background::Color(colour(self.roles.surface))),
+            text_color: Some(colour(self.roles.text)),
+            border: Border {
+                color: colour(self.roles.border),
+                width: 1.0,
+                radius: border::radius(4),
+            },
+            ..container::Style::default()
+        }
+    }
+
     /// The seek bar with nothing to seek through.
     ///
     /// The colour the slider draws the unplayed part of its rail in, so the

@@ -15,7 +15,7 @@ use crate::selection::{RowSelection, SortOverride};
 use crate::settings::Settings;
 use crate::theme::Theme;
 use crate::widgets::columns::Column;
-use crate::widgets::{panes, table, transport, welcome};
+use crate::widgets::{menu, panes, table, transport, welcome};
 use iced::widget::{button, container, row, text, text_input};
 use iced::{Element, Fill, Length, Subscription, Task};
 use scoria_core::command::Command;
@@ -68,6 +68,8 @@ pub enum Message {
     RootChosen(Option<std::path::PathBuf>),
     CloseOverlay,
     SearchChanged(String),
+    /// Something chosen from a track's right-click menu.
+    Menu(menu::Event),
     /// A key press, already resolved through the keymap.
     Action(Action),
     /// Which modifiers are held. Pointer events do not carry them, so a click
@@ -173,6 +175,13 @@ pub struct App {
     ///
     /// A set of one, because the table it is drawn with takes a selection.
     queue_selection: std::collections::BTreeSet<usize>,
+    /// The right-click menu, if one is open: which track, and where.
+    ///
+    /// Not an `Overlay`. §9's overlays are a family of drawers with one set of
+    /// rules -- they rise from the bottom, animate, resize by dragging and
+    /// never cover the transport -- and a menu at the pointer shares none of
+    /// it. Folding it in would mean those rules stopped describing the family.
+    menu: Option<TrackMenu>,
     /// The file's own tags, read when the properties overlay opens.
     properties: Vec<(String, String)>,
     properties_problem: Option<String>,
@@ -257,6 +266,7 @@ impl App {
             queue_lines: Vec::new(),
             queue_scroll: 0.0,
             queue_selection: std::collections::BTreeSet::new(),
+            menu: None,
             properties: Vec::new(),
             properties_problem: None,
         }
@@ -401,6 +411,7 @@ impl App {
             Message::CloseOverlay => self.set_overlay(None),
             Message::ArtistPane(event) => self.on_artist_pane(event),
             Message::AlbumPane(event) => self.on_album_pane(event),
+            Message::Menu(event) => return self.on_menu(event),
             Message::Action(action) => return self.on_action(action),
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
         }
@@ -514,9 +525,6 @@ impl App {
                 self.selection_rows.focus(index, self.rows.len());
                 self.play_from_cursor();
             }
-            // §9.1's one escape hatch from artwork following playback: a
-            // right-click opens the overlay for *that* album, without turning
-            // into a follow-selection mode.
             table::Event::Context(index) => {
                 // A right-click on an unselected row moves the selection to it;
                 // on a selected one it leaves the selection alone, so acting on
@@ -524,14 +532,20 @@ impl App {
                 if !self.selection_rows.rows().contains(&index) {
                     self.select(index, crate::keymap::Mods::NONE);
                 }
-                let album = self
-                    .rows
-                    .get(index)
-                    .and_then(|id| self.track(*id))
-                    .map(|t| t.album_id);
-                self.set_overlay(Some(Overlay::Artwork(album)));
+                // §9.1's escape hatch from artwork following playback is now
+                // one item in here rather than the whole gesture, which is
+                // what gives §9.3's metadata a mouse at all.
+                if let Some(track) = self.rows.get(index).copied() {
+                    self.menu = Some(TrackMenu {
+                        track,
+                        at: pointer(),
+                    });
+                }
             }
             table::Event::Scrolled { offset, viewport } => {
+                // The menu was opened on a row, and the row has moved out from
+                // under it.
+                self.menu = None;
                 self.scroll_offset = offset;
                 self.viewport_height = viewport;
             }
@@ -770,6 +784,49 @@ impl App {
         if let Err(e) = self.settings.save(&self.paths) {
             self.status = format!("cannot save settings: {e}");
         }
+    }
+
+    /// A track's right-click menu (§9.6).
+    ///
+    /// Every item is something the application could already do and a mouse
+    /// could not reach. Nothing here is new behaviour; it is the door.
+    fn on_menu(&mut self, event: menu::Event) -> Task<Message> {
+        let Some(TrackMenu { track, .. }) = self.menu.take() else {
+            return Task::none();
+        };
+        let Some(album) = self.track(track).map(|t| t.album_id) else {
+            return Task::none();
+        };
+
+        match event {
+            // §6.4: playing an album snapshots just that album. The core has
+            // always handled this and nothing has ever asked for it.
+            menu::Event::PlayAlbum => {
+                self.send(Command::PlayFrom {
+                    source: scoria_core::SourceSpec::Album(album),
+                    at: track,
+                });
+            }
+            // Invariant 6's one exception to artwork following playback.
+            menu::Event::ShowArtwork => self.set_overlay(Some(Overlay::Artwork(Some(album)))),
+            // §9.3, and the reason this menu exists.
+            menu::Event::Properties => return self.open_overlay(Overlay::Properties(track)),
+            menu::Event::FilterArtist => {
+                if let Some(artist) = self.track(track).map(|t| t.album_artist.clone()) {
+                    self.selection.album_artists = vec![artist];
+                    // §7.2's cascade runs one way: choosing an artist resets
+                    // what is below it.
+                    self.selection.albums.clear();
+                    self.reset_view();
+                }
+            }
+            menu::Event::FilterAlbum => {
+                self.selection.albums = vec![album];
+                self.reset_view();
+            }
+            menu::Event::Dismiss => {}
+        }
+        Task::none()
     }
 
     /// The queue's own table events. §9.2: double-click sets `position`.
@@ -1173,6 +1230,12 @@ impl App {
                 // §9: Escape closes the overlay. With none open it clears the
                 // filters instead -- one key backing out of whatever is
                 // currently narrowing the view.
+                //
+                // The menu goes first, and on its own: it is the most recent
+                // thing to have opened, so it is what Escape is reaching for.
+                if self.menu.take().is_some() {
+                    return Task::none();
+                }
                 if self.open_overlay_kind().is_none() {
                     self.clear_filters();
                 } else {
@@ -1524,7 +1587,7 @@ impl App {
             None => table::view(table_view, Message::Table),
         };
 
-        layouts::arrange(
+        let window = layouts::arrange(
             self.placement,
             body,
             transport::view(&transport_view, Message::Transport),
@@ -1532,7 +1595,23 @@ impl App {
             browser,
             overlay,
             &self.theme,
-        )
+        );
+
+        // Stacked here rather than handed to `arrange`, which arranges the
+        // application and should not have to learn about a menu. It goes over
+        // everything, the transport included: unlike §9's drawers this is a
+        // momentary thing at the pointer, and a menu the window can clip is a
+        // menu with items nobody can choose.
+        match self.menu.as_ref().and_then(|open| {
+            self.track(open.track)
+                .map(|track| (menu::items(track, &self.keymap), open.at))
+        }) {
+            Some((items, at)) => {
+                iced::widget::stack![window, menu::view(items, at, &self.theme, Message::Menu)]
+                    .into()
+            }
+            None => window,
+        }
     }
 
     fn overlay_content(&self, overlay: Overlay) -> Element<'_, Message, Theme> {
@@ -1716,6 +1795,13 @@ impl App {
         publish_keymap(&self.keymap);
 
         let keys = iced::event::listen_with(|event, status, _window| {
+            // Recorded whatever else happens, including while something else
+            // has captured the event: the pointer is still where it is.
+            if let iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) = event {
+                POINTER.with(|pointer| pointer.set(position));
+                return None;
+            }
+
             // A key typed into the search field belongs to the search field.
             if status == iced::event::Status::Captured {
                 return None;
@@ -1741,6 +1827,21 @@ impl App {
 }
 
 thread_local! {
+    /// Where the pointer was, last time it moved.
+    ///
+    /// `mouse_area::on_right_press` carries no position, and a menu has to
+    /// open where the click was. Recorded in the event filter rather than sent
+    /// as a message: every message rebuilds the view, and this changes on every
+    /// pixel of every mouse movement, so a message would mean rebuilding the
+    /// table for a value almost nothing reads.
+    ///
+    /// Thread-local for the same reason [`KEYMAP`] is -- `listen_with` takes a
+    /// plain `fn`, so nothing can travel in with the closure, and iced's event
+    /// loop is single-threaded.
+    static POINTER: std::cell::Cell<iced::Point> = const {
+        std::cell::Cell::new(iced::Point::ORIGIN)
+    };
+
     /// The keymap the subscription resolves against.
     ///
     /// `listen_with` takes a plain `fn`, not a closure, so the map cannot be
@@ -1763,6 +1864,11 @@ fn publish_keymap(keymap: &Keymap) {
             published.borrow_mut().clone_from(keymap);
         }
     });
+}
+
+/// Where the pointer is now.
+fn pointer() -> iced::Point {
+    POINTER.with(std::cell::Cell::get)
 }
 
 /// What a key press means, according to the published keymap.
@@ -1788,6 +1894,13 @@ fn resolve_key(
             .resolve_iced(modified_key, modifiers)
             .or_else(|| keymap.resolve_iced(key, modifiers))
     })
+}
+
+/// An open right-click menu: the track it is for, and where it opened.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TrackMenu {
+    track: TrackId,
+    at: iced::Point,
 }
 
 const fn next_repeat(current: RepeatMode) -> RepeatMode {

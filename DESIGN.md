@@ -326,7 +326,7 @@ Library mode ignores filters but still respects the table's current sort, since 
 
 - The snapshot **stops** when it runs out, unless repeat is on. A snapshot that silently expands is not a snapshot; repeat-all wraps the same list rather than extending it, which is why it is allowed to be the one exception.
 - On advance, tracks whose files no longer resolve are **skipped**.
-- Playing an album from a group header or the album pane snapshots just that album.
+- Playing an album snapshots just that album. This was first described as a group-header or album-pane action, and it was neither: the header was deliberately made inert, because a single click replacing the playback snapshot made the most destructive action in the table the easiest to hit by accident, and the album pane filters rather than plays. It lives on a track's right-click menu (§9.6), where it takes a deliberate gesture and names what it will do.
 - New music added to the library after playback started does **not** join the current queue. It is there next time you press play.
 
 ### 6.5 Jump to playing
@@ -637,6 +637,20 @@ Not a fourth layout. A mode with no table, which is what makes it safe: it share
 Cover art, transport, possibly a visualiser. Nothing else. It is the one place where visual polish is the goal, and it exists so the dense views never have to compromise.
 
 Same process, same playback, one keystroke in and the same keystroke out. Not a second window. Resist adding a queue list or a search box; that would make it a fourth layout with all the synchronisation problems that implies.
+
+### 9.6 The track menu
+
+A right-click on a track opens a small menu at the pointer.
+
+It exists because the mouse had no way to reach §9.3's metadata -- `Ctrl+I` was the only path -- and because two things that were built could not be reached at all: playing just an album (§6.4), and playing a single track. Every item is something the application could already do. The menu is the door, not the feature.
+
+**It is not one of the overlays above.** Those are a family: drawers that rise from the bottom, animate, resize by dragging, and never cover the transport, with one `Option` holding the open one. A menu at the pointer shares none of that, and folding it into the same enum would mean the rules stated for the family stopped describing it. It shares the one rule that matters -- Escape closes it, and closes it before it closes anything else, because it is the most recent thing to have opened.
+
+Showing the album art is one item rather than the whole gesture. Invariant 6 makes that the single exception to artwork following what is playing, so it survives the rearrangement rather than being replaced by it.
+
+The keystroke shown beside an item is read from the keymap, as §8's cheatsheet is. An item with no binding shows nothing, and a binding added later appears without anyone editing the menu.
+
+It opens where the click was. `mouse_area`'s right-press carries no position, so the pointer is recorded in the event filter rather than sent as a message -- every message rebuilds the view, and the pointer changes on every pixel of every movement.
 
 ---
 

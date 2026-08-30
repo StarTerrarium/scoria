@@ -5,6 +5,7 @@
 
 pub mod columns;
 pub mod icon;
+pub mod menu;
 pub mod panes;
 pub mod table;
 pub mod transport;
