@@ -1847,9 +1847,90 @@ fn track_summary(track: &Track) -> Vec<(&'static str, String)> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use crate::keymap::{Binding, Trigger};
     use iced::keyboard::{Key, Modifiers};
+
+    #[test]
+    fn the_repeat_button_cycles_and_comes_back() {
+        // §6.6, and the same shape as the layout cycle: three presses must
+        // return to where they started, or the button is a trap.
+        let mut mode = RepeatMode::Off;
+        let mut seen = vec![mode];
+        for _ in 0..2 {
+            mode = next_repeat(mode);
+            seen.push(mode);
+        }
+        assert_eq!(next_repeat(mode), RepeatMode::Off);
+        let distinct: std::collections::HashSet<String> =
+            seen.iter().map(|mode| format!("{mode:?}")).collect();
+        assert_eq!(distinct.len(), 3, "cycling skipped a mode");
+    }
+
+    #[test]
+    fn a_scan_says_what_it_did_in_words() {
+        use scoria_core::event::LibraryDelta as D;
+
+        assert!(describe(&D::TracksAdded(vec![TrackId(1), TrackId(2)]), 40).contains('2'));
+        assert!(describe(&D::TracksChanged(vec![TrackId(1)]), 40).contains("retagged"));
+        // §7.4: a vanished file is struck through, not removed, so this is a
+        // change in how rows look rather than in how many there are.
+        let availability = describe(&D::AvailabilityChanged(vec![TrackId(1)]), 40);
+        assert!(availability.contains("missing") || availability.contains("came back"));
+        assert!(
+            !availability.contains("40"),
+            "it reported a count that did not change"
+        );
+    }
+
+    #[test]
+    fn the_properties_summary_states_absent_metadata_rather_than_inventing_it() {
+        // A file with nothing but the tags every track has. Built here rather
+        // than borrowed from a fixture, because the point of the test is
+        // exactly which fields are absent.
+        let bare = Track {
+            id: TrackId(1),
+            album_id: scoria_core::AlbumId(1),
+            path: scoria_core::RelativePath::new("a/01.flac").unwrap(),
+            title: "Untitled".to_owned(),
+            artist: "Someone".to_owned(),
+            album_artist: "Someone".to_owned(),
+            album_artist_sort: None,
+            album: "An Album".to_owned(),
+            date: None,
+            disc: None,
+            track_number: None,
+            duration: Duration::from_secs(200),
+            replay_gain: scoria_core::ReplayGain::default(),
+            added_at: scoria_core::Timestamp(0),
+            play_count: 0,
+            genre: None,
+            composer: None,
+            audio: scoria_core::model::AudioProperties::default(),
+            available: true,
+        };
+
+        let summary = track_summary(&bare);
+        let keys: Vec<&str> = summary.iter().map(|(key, _)| *key).collect();
+
+        // The fields that are always there.
+        for key in ["Title", "Artist", "Album", "Duration", "Path", "ReplayGain"] {
+            assert!(keys.contains(&key), "{key} is missing from the summary");
+        }
+        // And the ones that are not, when the tags do not say.
+        for key in ["Date", "Disc", "Track", "Album artist sort"] {
+            assert!(!keys.contains(&key), "{key} was invented");
+        }
+        // §6.7: untagged means unity, and saying so here saves the question
+        // being asked of the loudness later.
+        let gain = summary
+            .iter()
+            .find(|(key, _)| *key == "ReplayGain")
+            .map(|(_, value)| value.as_str());
+        assert_eq!(gain, Some("not tagged (plays at 0 dB)"));
+    }
 
     #[test]
     fn key_presses_resolve_against_the_keymap_the_application_published() {
