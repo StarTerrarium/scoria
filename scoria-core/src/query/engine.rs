@@ -90,7 +90,7 @@ pub struct QueryOutcome {
     /// The tracks to show, in order.
     ///
     /// Ids rather than rows: the caller already holds the
-    /// [`LibraryIndex`](crate::query::index::LibraryIndex) these came from, so
+    /// [`LibraryIndex`] these came from, so
     /// copying rows out would be duplicating what it can look up in constant
     /// time. This is also exactly what `Event::QueryResult` carries.
     pub tracks: Vec<TrackId>,

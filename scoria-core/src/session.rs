@@ -766,14 +766,6 @@ impl Session {
     pub fn config_mut(&mut self) -> &mut LibraryConfig {
         &mut self.config
     }
-
-    /// The database, for a frontend that needs repository access directly.
-    ///
-    /// Full-text search goes through here, since the index cannot answer it.
-    #[must_use]
-    pub fn database(&self) -> &impl TrackRepository {
-        &self.db
-    }
 }
 
 #[cfg(test)]

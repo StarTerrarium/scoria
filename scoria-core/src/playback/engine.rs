@@ -310,8 +310,6 @@ impl Engine {
                 self.source.set_shuffled(shuffled, &mut self.rng);
                 // What plays next just changed, so anything prepared is wrong.
                 self.invalidate_preload();
-                // Gain mode depends on shuffle (§6.7), so the current track's
-                // correction may have changed even though the track has not.
                 // The gain mode depends on shuffle (§6.7), and gain now rides
                 // on the source rather than being a backend setting, so the
                 // current track's correction cannot be changed in place. It

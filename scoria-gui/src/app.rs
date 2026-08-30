@@ -505,9 +505,6 @@ impl App {
                 self.cursor = Some(index);
                 self.play_from_cursor();
             }
-            // The right-click menu arrives with the overlays at M9. §9.1 makes
-            // "Show album art" the one escape hatch from artwork following
-            // playback, so it belongs there rather than here.
             // §9.1's one escape hatch from artwork following playback: a
             // right-click opens the overlay for *that* album, without turning
             // into a follow-selection mode.
@@ -1084,10 +1081,9 @@ impl App {
                 self.position = position;
                 Command::Seek(position)
             }
-            // The artwork overlay arrives at M9.
+            transport::Event::ToggleQueue => return self.open_overlay(Overlay::Queue),
             // §9.1: the resting state is the thumbnail; clicking it opens the
             // playing track's art full size.
-            transport::Event::ToggleQueue => return self.open_overlay(Overlay::Queue),
             transport::Event::ShowArtwork => {
                 self.set_overlay(overlays::toggle(
                     self.open_overlay_kind(),
@@ -1240,11 +1236,6 @@ impl App {
         )
     }
 
-    /// Turns the cursor into a snapshot and plays it.
-    ///
-    /// The §6.3 setting decides what gets snapshotted, and the session is the
-    /// one place that decision is made -- which is why this hands over what is
-    /// shown rather than deciding for itself.
     /// Applies a click to the selection.
     ///
     /// Plain replaces, shift extends from the anchor, control toggles. The

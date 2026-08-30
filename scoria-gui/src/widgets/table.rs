@@ -117,7 +117,6 @@ pub fn centre_offset(line: usize, lines: usize, viewport_height: f32) -> f32 {
     centred.clamp(0.0, furthest)
 }
 
-/// What the table needs in order to draw itself.
 /// A heading part-way through being dragged somewhere else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reorder {
@@ -127,6 +126,7 @@ pub struct Reorder {
     pub to: usize,
 }
 
+/// What the table needs in order to draw itself.
 pub struct TableView<'a> {
     pub lines: &'a [Line],
     /// Owned, so the whole view can move into the `responsive` closure -- which
@@ -475,8 +475,6 @@ fn track_row<'a, Message: Clone + 'a>(
     let theme = table.theme;
     let text_colour = theme.text_style(theme.row_text(state));
 
-    // §7.4: a missing file is marked rather than removed, so what will happen
-    // is stated rather than left to be discovered.
     let visible = table.columns.visible();
     let mut cells = row![]
         .align_y(Alignment::Center)

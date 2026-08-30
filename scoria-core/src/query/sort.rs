@@ -176,12 +176,12 @@ impl SortField {
                 .map_or(SortValue::Missing, |db| {
                     SortValue::Number((f64::from(db) * 100.0) as i64)
                 }),
-            // As text, which is what it is. A path that is not valid UTF-8
-            // sorts as missing rather than as an empty string, so it lands with
-            // the other unknowns instead of at the top.
             // Never missing: a track that has never been played has been
             // played nought times, which is a number and sorts like one.
             Self::PlayCount => SortValue::Number(i64::from(track.play_count)),
+            // As text, which is what it is. A path that is not valid UTF-8
+            // sorts as missing rather than as an empty string, so it lands with
+            // the other unknowns instead of at the top.
             Self::Path => track
                 .path
                 .as_path()

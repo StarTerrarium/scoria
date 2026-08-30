@@ -76,10 +76,6 @@ impl LibraryIndex {
         self.albums.get(&id)
     }
 
-    pub fn albums(&self) -> impl Iterator<Item = &Album> {
-        self.albums.values()
-    }
-
     #[must_use]
     pub fn tracks(&self) -> &[Track] {
         &self.tracks

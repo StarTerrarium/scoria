@@ -7,7 +7,6 @@
 //! see [`Scanner::scan`]'s note. Keeping the logic sync also means it is
 //! testable without a runtime.
 
-use crate::date::Date;
 use crate::db::repository::{AlbumRepository, NewAlbum, NewTrack, TrackRepository};
 use crate::error::CoreError;
 use crate::event::LibraryDelta;
@@ -406,11 +405,4 @@ fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-}
-
-/// Reads a date out of a string the way the scanner does, for callers that have
-/// a date from somewhere other than a tag.
-#[must_use]
-pub fn parse_date(raw: &str) -> Option<Date> {
-    Date::parse(raw)
 }

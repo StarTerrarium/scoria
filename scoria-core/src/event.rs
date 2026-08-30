@@ -27,6 +27,11 @@ pub enum LibraryDelta {
     /// Something changed; re-run outstanding queries.
     Invalidated,
     TracksAdded(Vec<TrackId>),
+    /// Nothing emits this yet, and a scan never will: §7.4 marks a file that
+    /// has gone rather than deleting its row, which is what
+    /// [`Self::AvailabilityChanged`] reports. Kept because the index applies
+    /// it correctly and a library rebuilt from scratch is the case that would
+    /// want it -- do not reach for it to mean "a file vanished".
     TracksRemoved(Vec<TrackId>),
     /// Files appeared or vanished. Vanished tracks are not deleted -- they are
     /// shown struck through and skipped on advance (§7.4).
