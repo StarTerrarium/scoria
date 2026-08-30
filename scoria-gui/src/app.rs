@@ -1759,8 +1759,18 @@ impl App {
     /// §10: the keymap is a data structure. This is the only place a key press
     /// is looked at, and all it does is ask the keymap what the key means.
     pub fn subscription(&self) -> Subscription<Message> {
-        let keymap = self.keymap.clone();
-        let keys = iced::event::listen_with(move |event, status, _window| {
+        // Published to the thread-local the resolver reads, because
+        // `listen_with` takes a plain `fn` and the map cannot travel in with
+        // the closure. Without this the cheatsheet lists one keymap and key
+        // presses resolve against another -- which is invisible today, since
+        // both are `Keymap::standard()`, and stops being invisible the moment
+        // §10's second keymap is a value someone can choose.
+        //
+        // Guarded on equality because iced asks for the subscription after
+        // every message, and this is a poll-driven application.
+        publish_keymap(&self.keymap);
+
+        let keys = iced::event::listen_with(|event, status, _window| {
             // A key typed into the search field belongs to the search field.
             if status == iced::event::Status::Captured {
                 return None;
@@ -1770,9 +1780,7 @@ impl App {
                     ref key,
                     modifiers,
                     ..
-                }) => KEYMAP
-                    .with(|k| k.borrow().resolve_iced(key, modifiers))
-                    .map(Message::Action),
+                }) => resolve_key(key, modifiers).map(Message::Action),
                 // Tracked separately because a mouse click carries no
                 // modifiers of its own, and shift-click has to know.
                 iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => Some(
@@ -1781,7 +1789,6 @@ impl App {
                 _ => None,
             }
         });
-        let _ = keymap;
 
         Subscription::batch([iced::time::every(POLL).map(|_| Message::Tick), keys])
     }
@@ -1794,7 +1801,27 @@ thread_local! {
     /// captured. It is thread-local rather than global because iced's event
     /// loop is single-threaded, and this keeps the keymap a value that can be
     /// swapped -- which is the whole point of §10.
+    ///
+    /// `App::subscription` publishes `App::keymap` here. The initial value is
+    /// only what applies before the first subscription is asked for.
     static KEYMAP: std::cell::RefCell<Keymap> = std::cell::RefCell::new(Keymap::standard());
+}
+
+/// Makes `keymap` the one key presses resolve against.
+///
+/// Guarded on equality because iced asks for the subscription after every
+/// message, and this is a poll-driven application.
+fn publish_keymap(keymap: &Keymap) {
+    KEYMAP.with(|published| {
+        if *published.borrow() != *keymap {
+            published.borrow_mut().clone_from(keymap);
+        }
+    });
+}
+
+/// What a key press means, according to the published keymap.
+fn resolve_key(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> Option<Action> {
+    KEYMAP.with(|published| published.borrow().resolve_iced(key, modifiers))
 }
 
 const fn next_repeat(current: RepeatMode) -> RepeatMode {
@@ -1870,4 +1897,64 @@ fn track_summary(track: &Track) -> Vec<(&'static str, String)> {
         summary.push(("Availability", "file is missing".to_owned()));
     }
     summary
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keymap::{Binding, Trigger};
+    use iced::keyboard::{Key, Modifiers};
+
+    #[test]
+    fn key_presses_resolve_against_the_keymap_the_application_published() {
+        // The seam §10 is built around, and the one that was not connected:
+        // `App::keymap` fed the cheatsheet while key presses resolved against
+        // a thread-local nothing ever wrote. Both were `Keymap::standard()`,
+        // so the gap was invisible -- until a second keymap became a value
+        // someone could choose, which is the entire point of §10.
+        let vim = Keymap {
+            name: "Vim".to_owned(),
+            bindings: vec![
+                Binding::new(
+                    Trigger::Char('j'),
+                    crate::keymap::Mods::NONE,
+                    Action::MoveDown,
+                ),
+                Binding::new(
+                    Trigger::Char('k'),
+                    crate::keymap::Mods::NONE,
+                    Action::MoveUp,
+                ),
+            ],
+        };
+        publish_keymap(&vim);
+
+        assert_eq!(
+            resolve_key(&Key::Character("j".into()), Modifiers::empty()),
+            Some(Action::MoveDown),
+            "the published keymap did not reach the resolver"
+        );
+        // And the standard map's bindings are gone, rather than both applying.
+        assert_eq!(
+            resolve_key(
+                &Key::Named(iced::keyboard::key::Named::Space),
+                Modifiers::empty()
+            ),
+            None
+        );
+
+        // Publishing again swaps it back, so the map really is a value.
+        publish_keymap(&Keymap::standard());
+        assert_eq!(
+            resolve_key(
+                &Key::Named(iced::keyboard::key::Named::Space),
+                Modifiers::empty()
+            ),
+            Some(Action::PlayPause)
+        );
+        assert_eq!(
+            resolve_key(&Key::Character("j".into()), Modifiers::empty()),
+            None
+        );
+    }
 }
