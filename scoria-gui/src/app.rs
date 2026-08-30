@@ -1606,10 +1606,21 @@ impl App {
             self.track(open.track)
                 .map(|track| (menu::items(track, &self.keymap), open.at))
         }) {
-            Some((items, at)) => {
-                iced::widget::stack![window, menu::view(items, at, &self.theme, Message::Menu)]
-                    .into()
-            }
+            Some((items, at)) => iced::widget::stack![
+                window,
+                // Opaque for the reason `layouts::arrange` wraps its overlay:
+                // a layer that is not stops mouse events reaching it alone,
+                // and lets them through to the rows underneath.
+                iced::widget::opaque(menu::view(items, at, &self.theme, Message::Menu))
+            ]
+            // Both, and not optional. A `Stack` does not inspect its children
+            // for a sizing strategy -- its own default is `Shrink`, which sets
+            // the limits compressing, and every `Fill` inside then resolves to
+            // its content rather than to the window. The menu collapsed to
+            // nothing and drew nothing, which is exactly what it looked like.
+            .width(Fill)
+            .height(Fill)
+            .into(),
             None => window,
         }
     }
@@ -1986,6 +1997,66 @@ mod tests {
     use super::*;
     use crate::keymap::{Binding, Trigger};
     use iced::keyboard::{Key, Modifiers};
+
+    #[test]
+    fn right_clicking_a_row_opens_its_menu() {
+        // The handler, without a window. `App::disconnected` has no session,
+        // which is enough: opening the menu reads `rows`, not the library.
+        let mut app = App::disconnected(String::new());
+        app.rows = vec![TrackId(11), TrackId(22), TrackId(33)];
+
+        app.on_table(table::Event::Context(1));
+
+        assert_eq!(
+            app.menu.map(|open| open.track),
+            Some(TrackId(22)),
+            "a right-click did not open the menu on the row it was on"
+        );
+    }
+
+    #[test]
+    fn right_clicking_a_row_outside_the_result_opens_nothing() {
+        let mut app = App::disconnected(String::new());
+        app.rows = vec![TrackId(11)];
+        app.on_table(table::Event::Context(99));
+        assert!(app.menu.is_none());
+    }
+
+    #[test]
+    fn escape_closes_the_menu_before_it_closes_anything_else() {
+        // The one rule the menu shares with §9's overlays. It is the most
+        // recent thing to have opened, so it is what Escape is reaching for --
+        // and an overlay behind it has to survive that first press.
+        let mut app = App::disconnected(String::new());
+        app.rows = vec![TrackId(11)];
+        app.set_overlay(Some(Overlay::Help));
+        app.on_table(table::Event::Context(0));
+        assert!(app.menu.is_some());
+
+        let _ = app.on_action(Action::Dismiss);
+        assert!(app.menu.is_none(), "escape did not close the menu");
+        assert_eq!(
+            app.open_overlay_kind(),
+            Some(Overlay::Help),
+            "escape closed the drawer behind the menu as well"
+        );
+
+        let _ = app.on_action(Action::Dismiss);
+        assert_eq!(app.open_overlay_kind(), None, "a second escape did nothing");
+    }
+
+    #[test]
+    fn scrolling_dismisses_the_menu() {
+        // It was opened on a row, and the row has moved out from under it.
+        let mut app = App::disconnected(String::new());
+        app.rows = vec![TrackId(11)];
+        app.on_table(table::Event::Context(0));
+        app.on_table(table::Event::Scrolled {
+            offset: 120.0,
+            viewport: 600.0,
+        });
+        assert!(app.menu.is_none());
+    }
 
     #[test]
     fn the_repeat_button_cycles_and_comes_back() {
