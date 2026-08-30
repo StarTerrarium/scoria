@@ -76,16 +76,30 @@ impl Icon {
 
     /// The side of the box it is drawn in.
     ///
-    /// Play and pause are the anchor and are largest; the rest of the
-    /// transport is a step down; what changes what happens *next* is a step
-    /// down again. Size and weight carry the hierarchy, so no icon has to be a
-    /// coloured shape to say it matters.
+    /// One size for everything but play and pause, which are a little larger
+    /// as the anchor. The secondary icons are *not* drawn smaller: a row of
+    /// controls at two footprints reads as two rows, and the tier is already
+    /// carried by [`Self::stroke`] and by the colour the theme picks from
+    /// [`Emphasis`]. Same size, less weight.
     #[must_use]
     pub const fn size(self) -> f32 {
         match self {
             Self::Play | Self::Pause => 20.0,
-            Self::Previous | Self::Next => 18.0,
-            _ => 14.0,
+            _ => 18.0,
+        }
+    }
+
+    /// How thick this icon's strokes are, as a fraction of its box.
+    ///
+    /// What separates the tiers now that they are the same size. The primary
+    /// controls are mostly filled shapes and read as solid; the secondary ones
+    /// are line art, and a thinner line is the difference between "the same
+    /// icon, quieter" and "a different icon".
+    #[must_use]
+    pub const fn stroke(self) -> f32 {
+        match self.emphasis() {
+            Emphasis::Primary => 0.1,
+            Emphasis::Secondary => 0.075,
         }
     }
 }
@@ -96,8 +110,11 @@ impl Icon {
 /// toggle puts its mark.
 const GLYPH: f32 = 0.66;
 
-/// How thick a drawn stroke is, relative to the box.
-const STROKE: f32 = 0.1;
+/// How much smaller an arrowhead is than the shape it would be on its own.
+///
+/// An arrow that terminates a line should stay line art. Left at full size the
+/// heads dominate, and shuffle turns into a solid blob rather than two routes.
+const HEAD: f32 = 0.8;
 
 /// Builds an icon, sized and coloured for where it sits.
 #[must_use]
@@ -159,10 +176,23 @@ impl<Message> canvas::Program<Message, Theme, Renderer> for Symbol {
 /// Draws `icon` into a `glyph`-sided square whose top left is `origin`.
 fn draw(icon: Icon, frame: &mut Frame, origin: Point, glyph: f32, pen: IconPen) {
     let at = |x: f32, y: f32| Point::new(origin.x + x * glyph, origin.y + y * glyph);
-    let stroke = (glyph * STROKE).max(1.0);
+    // Never below a pixel: a half-pixel stroke is a smudge rather than a
+    // lighter line, which is the opposite of what thinning it is for.
+    let stroke = (glyph * icon.stroke()).max(1.0);
 
-    // A filled triangle pointing right, from three fractional corners.
-    let triangle = |frame: &mut Frame, left: f32, right: f32, top: f32, bottom: f32, flip: bool| {
+    // A filled triangle pointing right, from three fractional corners. `scale`
+    // shrinks it toward its own centre, which is how an arrowhead is kept
+    // lighter than a shape that stands alone.
+    let wedge = |frame: &mut Frame,
+                 left: f32,
+                 right: f32,
+                 top: f32,
+                 bottom: f32,
+                 flip: bool,
+                 scale: f32| {
+        let (cx, cy) = ((left + right) / 2.0, (top + bottom) / 2.0);
+        let (left, right) = (cx + (left - cx) * scale, cx + (right - cx) * scale);
+        let (top, bottom) = (cy + (top - cy) * scale, cy + (bottom - cy) * scale);
         let (a, b) = if flip { (right, left) } else { (left, right) };
         let path = Path::new(|p| {
             p.move_to(at(a, top));
@@ -172,6 +202,13 @@ fn draw(icon: Icon, frame: &mut Frame, origin: Point, glyph: f32, pen: IconPen) 
         });
         frame.fill(&path, pen.fill());
     };
+    let triangle = |frame: &mut Frame, left: f32, right: f32, top: f32, bottom: f32, flip: bool| {
+        wedge(frame, left, right, top, bottom, flip, 1.0);
+    };
+    let arrowhead =
+        |frame: &mut Frame, left: f32, right: f32, top: f32, bottom: f32, flip: bool| {
+            wedge(frame, left, right, top, bottom, flip, HEAD);
+        };
 
     // `weight` is a multiple of the stroke. Pause and the skip bars carry more
     // than a line does, so they hold their own beside a filled triangle.
@@ -212,8 +249,8 @@ fn draw(icon: Icon, frame: &mut Frame, origin: Point, glyph: f32, pen: IconPen) 
         Icon::Shuffle => {
             line(frame, (0.04, 0.26), (0.70, 0.74));
             line(frame, (0.04, 0.74), (0.70, 0.26));
-            triangle(frame, 0.70, 1.0, 0.60, 0.88, false);
-            triangle(frame, 0.70, 1.0, 0.12, 0.40, false);
+            arrowhead(frame, 0.70, 1.0, 0.60, 0.88, false);
+            arrowhead(frame, 0.70, 1.0, 0.12, 0.40, false);
         }
         // A loop, with the gaps and arrowheads that say it goes round.
         Icon::Repeat | Icon::RepeatOne => {
@@ -221,8 +258,8 @@ fn draw(icon: Icon, frame: &mut Frame, origin: Point, glyph: f32, pen: IconPen) 
             line(frame, (0.9, 0.36), (0.9, 0.64));
             line(frame, (0.86, 0.74), (0.22, 0.74));
             line(frame, (0.1, 0.64), (0.1, 0.36));
-            triangle(frame, 0.66, 0.94, 0.06, 0.46, false);
-            triangle(frame, 0.06, 0.34, 0.54, 0.94, true);
+            arrowhead(frame, 0.66, 0.94, 0.06, 0.46, false);
+            arrowhead(frame, 0.06, 0.34, 0.54, 0.94, true);
             if icon == Icon::RepeatOne {
                 // A bar through the middle: one. Heavier than a line and
                 // spanning most of the loop's inside, because at fourteen
@@ -261,9 +298,6 @@ mod tests {
         // playing and is reached for constantly; the right cluster changes
         // what happens next and is set once. Flattening this by accident
         // should fail rather than just look wrong.
-        assert!(Icon::Play.size() >= Icon::Previous.size());
-        assert!(Icon::Previous.size() > Icon::Queue.size());
-
         for icon in Icon::all() {
             let expected = match icon {
                 Icon::Previous | Icon::Play | Icon::Pause | Icon::Next => Emphasis::Primary,
@@ -271,6 +305,32 @@ mod tests {
             };
             assert_eq!(icon.emphasis(), expected, "{icon:?}");
         }
+    }
+
+    #[test]
+    fn the_tiers_are_carried_by_weight_rather_than_by_size() {
+        // Deliberate, and the second attempt: drawing the right cluster
+        // smaller made the transport read as two rows of controls rather than
+        // one. They share a footprint now, and the tier comes from a thinner
+        // stroke and the colour the theme picks from the emphasis.
+        let footprint = Icon::Previous.size();
+        for icon in Icon::all() {
+            if matches!(icon, Icon::Play | Icon::Pause) {
+                // The anchor, and the only thing allowed to be bigger.
+                assert!(icon.size() >= footprint, "{icon:?}");
+            } else {
+                assert!(
+                    (icon.size() - footprint).abs() < f32::EPSILON,
+                    "{icon:?} is {} where the row is {footprint}",
+                    icon.size()
+                );
+            }
+        }
+
+        assert!(
+            Icon::Queue.stroke() < Icon::Previous.stroke(),
+            "the secondary icons are no lighter than the primary ones"
+        );
     }
 
     #[test]
