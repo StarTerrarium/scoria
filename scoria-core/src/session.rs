@@ -126,7 +126,7 @@ impl Session {
     /// [`CoreError::Database`] or [`CoreError::Config`] if storage or settings
     /// cannot be read.
     pub fn open(paths: Paths) -> Result<Self, CoreError> {
-        let config: LibraryConfig = crate::config::load(&paths.config_file())?;
+        let config = crate::config::load_library(&paths.config_file())?;
         let db = SqliteDatabase::open(&paths.database())?;
         let index = LibraryIndex::load(&db)?;
         let (events, inbox) = channel();
@@ -728,7 +728,7 @@ impl Session {
     /// [`CoreError::Database`] if watching cannot be restarted.
     pub fn set_root(&mut self, root: PathBuf) -> Result<(), CoreError> {
         self.config.root = Some(root);
-        crate::config::save(&self.paths.config_file(), &self.config)?;
+        crate::config::save_library(&self.paths.config_file(), &self.config)?;
 
         // Dropping the handle stops the old thread and joins it, so the two
         // never watch different roots at once.
@@ -759,7 +759,7 @@ impl Session {
     ///
     /// [`CoreError::Config`] if the file cannot be written.
     pub fn save_config(&self) -> Result<(), CoreError> {
-        crate::config::save(&self.paths.config_file(), &self.config)
+        crate::config::save_library(&self.paths.config_file(), &self.config)
     }
 
     /// Settings, for a frontend to adjust before saving.

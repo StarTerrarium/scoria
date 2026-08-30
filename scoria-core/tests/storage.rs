@@ -583,7 +583,7 @@ fn a_missing_config_file_yields_defaults() {
     let path = tempdir().join("definitely-absent.toml");
     let _ = std::fs::remove_file(&path);
 
-    let config: LibraryConfig = scoria_core::config::load(&path).unwrap();
+    let config = scoria_core::config::load_library(&path).unwrap();
     assert_eq!(config, LibraryConfig::default());
     assert_eq!(
         config.play_behaviour,
@@ -603,11 +603,8 @@ fn config_survives_a_round_trip() {
     config.play_behaviour = PlayBehaviour::WholeLibrary;
     config.sort = SortPreset::Year;
     config.set_volume(0.4);
-    scoria_core::config::save(&path, &config).unwrap();
-    assert_eq!(
-        scoria_core::config::load::<LibraryConfig>(&path).unwrap(),
-        config
-    );
+    scoria_core::config::save_library(&path, &config).unwrap();
+    assert_eq!(scoria_core::config::load_library(&path).unwrap(), config);
 }
 
 #[test]
@@ -617,7 +614,7 @@ fn a_malformed_config_is_reported_rather_than_silently_reset() {
     let path = tempdir().join("malformed.toml");
     std::fs::write(&path, "root = [this is not toml").unwrap();
 
-    let err = scoria_core::config::load::<LibraryConfig>(&path).unwrap_err();
+    let err = scoria_core::config::load_library(&path).unwrap_err();
     assert!(matches!(err, CoreError::Config(_)), "got {err:?}");
 }
 
@@ -632,14 +629,14 @@ fn saving_creates_the_config_directory() {
     let path = tempdir().join("nested").join("deeper").join("config.toml");
     let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 
-    scoria_core::config::save(&path, &LibraryConfig::default()).unwrap();
+    scoria_core::config::save_library(&path, &LibraryConfig::default()).unwrap();
     assert!(path.exists());
 }
 
 #[test]
 fn saving_leaves_no_temporary_file_behind() {
     let path = tempdir().join("atomic.toml");
-    scoria_core::config::save(&path, &LibraryConfig::default()).unwrap();
+    scoria_core::config::save_library(&path, &LibraryConfig::default()).unwrap();
     assert!(!path.with_extension("toml.tmp").exists());
 }
 
@@ -692,7 +689,7 @@ fn writing_one_section_leaves_the_others_alone() {
     library.root = Some("/home/someone/Music".into());
     library.play_behaviour = PlayBehaviour::WholeLibrary;
     library.sort = SortPreset::Year;
-    scoria_core::config::save(&path, &library).unwrap();
+    scoria_core::config::save_library(&path, &library).unwrap();
 
     #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
     #[serde(default)]
@@ -707,10 +704,7 @@ fn writing_one_section_leaves_the_others_alone() {
     scoria_core::config::save_section(&path, "ui", &ui).unwrap();
 
     // Both survive.
-    assert_eq!(
-        scoria_core::config::load::<LibraryConfig>(&path).unwrap(),
-        library
-    );
+    assert_eq!(scoria_core::config::load_library(&path).unwrap(), library);
     assert_eq!(
         scoria_core::config::load_section::<Ui>(&path, "ui").unwrap(),
         ui
@@ -718,10 +712,131 @@ fn writing_one_section_leaves_the_others_alone() {
 }
 
 #[test]
+fn saving_the_library_settings_leaves_the_frontend_s_alone() {
+    // The direction the original test did not cover, and the one that
+    // happens: the frontend saves [ui] as the window is used, and core saves
+    // whenever the volume settles. Core used to serialise a bare
+    // LibraryConfig over the whole document, so every volume change took the
+    // theme, placement, columns, sort and drawer heights with it.
+    let path = tempdir().join("ui-then-library.toml");
+    let _ = std::fs::remove_file(&path);
+
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(default)]
+    struct Ui {
+        theme: String,
+    }
+    let ui = Ui {
+        theme: "Scoria Dark".to_owned(),
+    };
+    scoria_core::config::save_section(&path, "ui", &ui).unwrap();
+
+    // Now core saves, as it does on every settled volume change.
+    let mut library = LibraryConfig::default();
+    library.set_volume(0.4);
+    scoria_core::config::save_library(&path, &library).unwrap();
+
+    assert_eq!(
+        scoria_core::config::load_section::<Ui>(&path, "ui").unwrap(),
+        ui,
+        "saving the library settings deleted the frontend's"
+    );
+    let saved = scoria_core::config::load_library(&path).unwrap().volume();
+    assert!(
+        (saved - 0.4).abs() < f32::EPSILON,
+        "volume came back as {saved}"
+    );
+}
+
+#[test]
+fn a_file_written_before_the_library_section_existed_is_moved_into_it() {
+    // Core used to write its settings at the top level. Such a file has to
+    // keep working, and the stray keys have to go -- a dead `root` sitting
+    // above the live one is a trap for anyone editing this by hand (§7.3).
+    let path = tempdir().join("legacy-layout.toml");
+    std::fs::write(
+        &path,
+        "root = \"/home/someone/Music\"\nplay-behaviour = \"whole-library\"\nvolume = 0.25\n\n[ui]\ntheme = \"Scoria Dark\"\n",
+    )
+    .unwrap();
+
+    let config = scoria_core::config::load_library(&path).unwrap();
+    assert_eq!(config.root.as_deref(), Some(Path::new("/home/someone/Music")));
+    assert_eq!(config.play_behaviour, PlayBehaviour::WholeLibrary);
+    assert!((config.volume() - 0.25).abs() < f32::EPSILON);
+
+    // Moved, not copied: reading it rewrites the file, and the strays are
+    // gone. Asked of the parsed document rather than of the text, so this
+    // says what it means -- nothing but sections at the top level.
+    let text = std::fs::read_to_string(&path).unwrap();
+    let document: toml::Table = toml::from_str(&text).unwrap();
+    assert!(document.contains_key("library"), "not sectioned:\n{text}");
+    let strays: Vec<&String> = document
+        .iter()
+        .filter(|(_, value)| !value.is_table())
+        .map(|(key, _)| key)
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "stray top-level keys {strays:?}:\n{text}"
+    );
+
+    // And the frontend's section came through untouched.
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(default)]
+    struct Ui {
+        theme: String,
+    }
+    assert_eq!(
+        scoria_core::config::load_section::<Ui>(&path, "ui")
+            .unwrap()
+            .theme,
+        "Scoria Dark"
+    );
+
+    // Idempotent: a second read finds the section and changes nothing.
+    let again = scoria_core::config::load_library(&path).unwrap();
+    assert!((again.volume() - 0.25).abs() < f32::EPSILON);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+}
+
+#[test]
+fn a_session_saving_its_settings_leaves_the_frontend_s_alone() {
+    // The seam the bug actually lived at. The helper-level test above would
+    // have passed throughout: Session was the thing calling the wrong
+    // function, so that is where this has to be asserted.
+    let dir = tempdir().join("session-settings");
+    let _ = std::fs::remove_dir_all(&dir);
+    let paths = Paths::rooted_at(&dir);
+
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(default)]
+    struct Ui {
+        theme: String,
+    }
+    let ui = Ui {
+        theme: "Scoria Dark".to_owned(),
+    };
+    scoria_core::config::save_section(&paths.config_file(), "ui", &ui).unwrap();
+
+    let mut session = scoria_core::session::Session::open(paths.clone()).unwrap();
+    session.config_mut().set_volume(0.3);
+    session.save_config().unwrap();
+
+    assert_eq!(
+        scoria_core::config::load_section::<Ui>(&paths.config_file(), "ui").unwrap(),
+        ui,
+        "a session saving its settings deleted the frontend's"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_missing_section_yields_defaults() {
     let path = tempdir().join("no-section.toml");
     let _ = std::fs::remove_file(&path);
-    scoria_core::config::save(&path, &LibraryConfig::default()).unwrap();
+    scoria_core::config::save_library(&path, &LibraryConfig::default()).unwrap();
 
     #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
     #[serde(default)]

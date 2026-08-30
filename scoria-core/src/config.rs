@@ -7,10 +7,8 @@
 //!
 //! ## Why the shape is split
 //!
-//! [`load`] and [`save`] are generic over the settings type rather than being
-//! tied to one struct. Core owns the library settings; the GUI will own its own
-//! (theme, columns, browser placement), and the binary composes them into a
-//! single file:
+//! One file, one section per owner. Core owns the library settings; the GUI
+//! owns its own (theme, columns, browser placement):
 //!
 //! ```toml
 //! [library]
@@ -22,6 +20,13 @@
 //!
 //! That keeps one file for the user while leaving each crate owning its own
 //! section -- core never has to name a UI concept to store one.
+//!
+//! **There is deliberately no whole-document read or write.** Neither side can
+//! name the other's types, so serialising a whole document from either one
+//! means writing a file with the other's settings missing. There used to be a
+//! `save` that did exactly that, and core used it: every volume change wiped
+//! `[ui]`. [`load_section`] and [`save_section`] are the only way in, and
+//! [`load_library`] moves files written by that version into `[library]`.
 
 use crate::error::CoreError;
 use crate::query::sort::SortPreset;
@@ -193,28 +198,27 @@ impl LibraryConfig {
     }
 }
 
-/// Reads a settings file, falling back to defaults when it does not exist.
+/// The section `scoria-core`'s own settings live under.
 ///
-/// A file that exists but does not parse is an error rather than a silent
-/// reset: quietly discarding someone's settings because of a typo is worse
-/// than refusing to start and saying which line is wrong.
+/// They have not always: before this existed, core wrote its settings at the
+/// top level and the frontend wrote `[ui]` beside them. See [`load_library`].
+pub const LIBRARY_SECTION: &str = "library";
+
+/// Reads a settings file as a document, or `None` if there is no file.
 ///
-/// # Errors
-///
-/// [`CoreError::Config`] if the file exists but cannot be read or parsed.
-pub fn load<T: DeserializeOwned + Default>(path: &Path) -> Result<T, CoreError> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
-        Err(e) => {
-            return Err(CoreError::Config(format!(
-                "cannot read {}: {e}",
-                path.display()
-            )));
-        }
-    };
-    toml::from_str(&text)
-        .map_err(|e| CoreError::Config(format!("cannot parse {}: {e}", path.display())))
+/// Shared by everything that has to preserve what it did not write, which is
+/// every reader and writer of a sectioned file.
+fn read_document(path: &Path) -> Result<Option<toml::Table>, CoreError> {
+    match fs::read_to_string(path) {
+        Ok(text) => toml::from_str(&text)
+            .map(Some)
+            .map_err(|e| CoreError::Config(format!("cannot parse {}: {e}", path.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(CoreError::Config(format!(
+            "cannot read {}: {e}",
+            path.display()
+        ))),
+    }
 }
 
 /// Reads one section of a settings file.
@@ -229,16 +233,8 @@ pub fn load_section<T: DeserializeOwned + Default>(
     path: &Path,
     section: &str,
 ) -> Result<T, CoreError> {
-    let document: toml::Table = match fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text)
-            .map_err(|e| CoreError::Config(format!("cannot parse {}: {e}", path.display())))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
-        Err(e) => {
-            return Err(CoreError::Config(format!(
-                "cannot read {}: {e}",
-                path.display()
-            )));
-        }
+    let Some(document) = read_document(path)? else {
+        return Ok(T::default());
     };
 
     let Some(value) = document.get(section) else {
@@ -264,17 +260,7 @@ pub fn load_section<T: DeserializeOwned + Default>(
 /// [`CoreError::Config`] if the existing file cannot be read or parsed, the
 /// value cannot be serialised, or the file cannot be written.
 pub fn save_section<T: Serialize>(path: &Path, section: &str, value: &T) -> Result<(), CoreError> {
-    let mut document: toml::Table = match fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text)
-            .map_err(|e| CoreError::Config(format!("cannot parse {}: {e}", path.display())))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
-        Err(e) => {
-            return Err(CoreError::Config(format!(
-                "cannot read {}: {e}",
-                path.display()
-            )));
-        }
-    };
+    let mut document = read_document(path)?.unwrap_or_default();
 
     let value = toml::Value::try_from(value)
         .map_err(|e| CoreError::Config(format!("cannot serialise [{section}]: {e}")))?;
@@ -282,17 +268,67 @@ pub fn save_section<T: Serialize>(path: &Path, section: &str, value: &T) -> Resu
     write_atomically(path, &document)
 }
 
-/// Writes a settings file, creating the directory if needed.
+/// Reads the library settings, moving a file written before [`LIBRARY_SECTION`]
+/// existed into it.
 ///
-/// Writes to a temporary file and renames over the target, so an interrupted
-/// write cannot leave a half-written config that fails to parse on next start.
+/// Core used to write its settings at the top level of the file while the
+/// frontend wrote `[ui]` beside them -- and since neither side can name the
+/// other's types, core's save serialised a bare [`LibraryConfig`] over the
+/// whole document and took the frontend's settings with it every time the
+/// volume settled. [`save_section`] exists precisely to stop that; core simply
+/// was not using it.
+///
+/// Anything at the top level that is not a table belonged to core, so it moves
+/// into `[library]` and the strays are dropped in the same write. Left in
+/// place they would be a second, dead `root` sitting above the live one, which
+/// matters because §7.3 sends people to this file to edit it by hand.
 ///
 /// # Errors
 ///
-/// [`CoreError::Config`] if the value cannot be serialised or the file cannot
-/// be written.
-pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<(), CoreError> {
-    write_atomically(path, value)
+/// [`CoreError::Config`] if the file cannot be read, parsed or rewritten.
+pub fn load_library(path: &Path) -> Result<LibraryConfig, CoreError> {
+    let Some(mut document) = read_document(path)? else {
+        return Ok(LibraryConfig::default());
+    };
+    if document.contains_key(LIBRARY_SECTION) {
+        return load_section(path, LIBRARY_SECTION);
+    }
+
+    let legacy: toml::Table = document
+        .iter()
+        .filter(|(_, value)| !value.is_table())
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    if legacy.is_empty() {
+        // A sectioned file that simply has no [library] yet, which is the
+        // ordinary state of a fresh install whose frontend saved first.
+        return Ok(LibraryConfig::default());
+    }
+
+    let config: LibraryConfig = toml::Value::Table(legacy).try_into().map_err(|e| {
+        CoreError::Config(format!(
+            "cannot read the library settings from {}: {e}",
+            path.display()
+        ))
+    })?;
+
+    document.retain(|_, value| value.is_table());
+    document.insert(
+        LIBRARY_SECTION.to_owned(),
+        toml::Value::try_from(&config)
+            .map_err(|e| CoreError::Config(format!("cannot serialise [{LIBRARY_SECTION}]: {e}")))?,
+    );
+    write_atomically(path, &document)?;
+    Ok(config)
+}
+
+/// Writes the library settings, leaving every other section alone.
+///
+/// # Errors
+///
+/// [`CoreError::Config`] if the file cannot be read, parsed or written.
+pub fn save_library(path: &Path, config: &LibraryConfig) -> Result<(), CoreError> {
+    save_section(path, LIBRARY_SECTION, config)
 }
 
 /// Writes to a temporary file and renames over the target.
