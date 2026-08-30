@@ -159,8 +159,9 @@ cannot express: core's dependency graph is free of UI crates, there is only one
 track table, iced `Color` never leaves `theme/`, raw SQL never leaves `db/`, no
 panic lint has been `allow`ed outside a test module, every `Column` is offered
 in the panel that turns it on, nothing in the dependency graph can reach the
-internet, no `pub fn` under `widgets/` is left without a caller, and every
-`Command` variant has a sender.
+internet, no `pub fn` under `widgets/` is left without a caller, every
+`Command` variant has a sender, and the application id agrees with the desktop
+entry that carries its icon.
 
 The last two are the same rule at two scales: code nobody reaches is a feature
 nobody sees. It has happened twice. The now-playing marker `DESIGN.md` §11
@@ -169,6 +170,11 @@ the table never called it. Then four `Command` variants shipped that no
 frontend sent -- and unlike the marker, each was a trap for whoever sent one
 first (`DESIGN.md` §3.2). Unit tests do not catch either, because they call the
 thing directly, which is the seam that broke.
+
+The desktop-identity check is there for a rename that has not happened yet: the
+id has to become reverse-DNS before any store will take it (`DESIGN.md` §15),
+and a half-finished rename builds cleanly, passes every test, and shows the
+compositor's placeholder icon.
 
 CI runs it on every push. Run it before committing; if you add an invariant to
 this file, add a check for it there too.

@@ -802,4 +802,86 @@ Recorded because they were decided without explicit sign-off. Flag if any are wr
 
 ### Open
 
-Nothing outstanding. Decisions taken during implementation are recorded above.
+The application id, deferred until there is a domain to base it on (§15). Everything else was taken during implementation and is recorded above.
+
+---
+
+## 15. Distribution
+
+**Flatpak is the primary channel, an AUR package is the secondary one, and there
+is no AppImage.**
+
+### Why not AppImage
+
+Scoria touches the host in three places, and they are the three an AppImage
+handles worst. iced draws through wgpu, which needs the host's Vulkan or GL
+driver. rodio reaches ALSA, which `dlopen`s its plugins -- `libasound_module_pcm_pulse.so`
+and friends -- from the host at runtime. souvlaki needs the host's `libdbus-1`
+to own an MPRIS name (§12). `ldd` puts the whole dynamic surface at
+`libasound.so.2`, `libdbus-1.so.3` and `libsystemd.so.0`.
+
+An AppImage ships by bundling libraries, so each of these has to be deliberately
+*excluded* from the bundle and left to the host. That inverts the format's
+default and every one of the three is a silent failure when it is got wrong: a
+black window, no sound, or a media key that does nothing, on someone else's
+machine and never on the one it was built on. The format is a good fit for an
+application that talks to nothing; this one talks to the graphics stack, the
+audio stack and the session bus.
+
+### Why Flatpak
+
+It handles all three natively, but the better argument is that **it turns
+invariant 8 into something the kernel enforces.** §13 says Scoria never talks to
+the internet, and `check-boundaries.sh` proves no HTTP or TLS client is *linked*.
+A manifest that omits `--share=network` proves no socket can be *opened*, and
+Flathub renders that as a permissions line on the listing. The claim stops being
+one we make and becomes one the reader can check.
+
+The permissions are unusually tight for a media player, and that is a property of
+the design rather than an effort:
+
+```
+--device=dri                 # wgpu needs the GPU
+--socket=wayland
+--socket=fallback-x11
+--share=ipc
+--socket=pulseaudio          # covers PipeWire's pulse shim
+--own-name=org.mpris.MediaPlayer2.scoria
+--filesystem=xdg-music:ro
+                             # and deliberately no --share=network
+```
+
+`:ro` is not a courtesy. Nothing in 1.0 writes to the library: artwork is read
+and cached elsewhere (§5.3), and tag editing is post-1.0 (§9.4). When tag editing
+lands, this widens to `:rw` and existing users see a permission change -- which is
+the correct thing for them to see, and is recorded here so it is not a surprise.
+
+### The one rough edge
+
+Choosing the library folder already goes through the XDG Desktop Portal, so that
+half needs nothing: rfd speaks the portal protocol directly and pulls in no GTK.
+
+Watching it is the problem. A folder granted through the portal is exported via
+the document portal as a FUSE path, and recursive `inotify` there is not
+dependable -- so §5.2's watcher, which is not an optional feature, would quietly
+stop noticing changes. Hence `--filesystem=xdg-music:ro`, a real path where
+`notify` works, rather than relying on the portal grant alone.
+
+The cost is that a library outside `~/Music` -- on a second drive, which is
+exactly where a large well-organised library tends to live -- needs an explicit
+`flatpak override --filesystem=/path/to/music:ro`. That is a real limitation of
+the sandbox and not something the application can work around from inside it.
+It is documented in `packaging/PACKAGING.md` rather than hidden.
+
+### The application id
+
+Every store format wants a reverse-DNS id, and it has to agree across
+`application_id`, the desktop entry's basename, its `StartupWMClass`, its
+`Icon=`, and the icon files themselves. Nothing about a disagreement fails to
+build or fails a test -- the window just shows the compositor's placeholder icon.
+So `check-boundaries.sh` checks that they are one string.
+
+The id itself is still `scoria` and is deferred, because it should be a domain
+that will still be there later. The MPRIS bus name is deliberately *not* tied to
+it: `org.mpris.MediaPlayer2.scoria` is a D-Bus name, conventionally short, and
+renaming it would break anyone's `playerctl` scripts for no benefit.

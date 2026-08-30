@@ -257,4 +257,52 @@ else
   fi
 fi
 
+# DESIGN.md 15: the desktop identity is one string in several places.
+#
+# `application_id` is what a Wayland compositor matches against the desktop
+# entry's basename to find the icon, and `Icon=` is what the entry points at.
+# Get them out of step and nothing fails: the build is clean, the tests pass,
+# and the window shows the compositor's placeholder icon instead of Scoria's.
+# `scoria-gui/src/lib.rs` already documents that failure; nothing was checking
+# for it.
+#
+# This matters now because the id has to change. Every store format wants a
+# reverse-DNS one, and that rename has to land in all of these at once.
+appid=$(grep -oE 'application_id: "[^"]+"' scoria-gui/src/lib.rs 2>/dev/null \
+  | head -1 | sed 's/.*"\(.*\)"/\1/')
+
+if [ -z "$appid" ]; then
+  fail "could not read application_id from scoria-gui/src/lib.rs"
+else
+  mismatch=""
+  desktop="packaging/$appid.desktop"
+
+  if [ ! -f "$desktop" ]; then
+    mismatch="$mismatch\n  no packaging/$appid.desktop for application_id \"$appid\""
+  else
+    wmclass=$(grep -oE '^StartupWMClass=.*' "$desktop" | head -1 | cut -d= -f2-)
+    iconname=$(grep -oE '^Icon=.*' "$desktop" | head -1 | cut -d= -f2-)
+    [ "$wmclass" = "$appid" ] || \
+      mismatch="$mismatch\n  StartupWMClass=$wmclass, but application_id is \"$appid\""
+    [ "$iconname" = "$appid" ] || \
+      mismatch="$mismatch\n  Icon=$iconname, but application_id is \"$appid\""
+  fi
+
+  # The names `Icon=` resolves to once installed, and the one compiled in.
+  for ext in svg png; do
+    [ -f "packaging/$appid.$ext" ] || \
+      mismatch="$mismatch\n  no packaging/$appid.$ext for Icon=$appid"
+  done
+  grep -q "packaging/$appid.png" scoria-gui/src/lib.rs || \
+    mismatch="$mismatch\n  the window icon is not include_bytes!(\".../$appid.png\")"
+
+  if [ -n "$mismatch" ]; then
+    fail "the desktop identity disagrees with itself:"
+    printf '%b\n' "$mismatch" | sed '/^[[:space:]]*$/d; s/^/     /'
+    echo "     A window whose id does not match its entry shows a placeholder icon."
+  else
+    pass "one desktop identity, \"$appid\", everywhere"
+  fi
+fi
+
 exit $status
