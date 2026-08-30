@@ -92,7 +92,7 @@ pub struct QueryOutcome {
     /// Ids rather than rows: the caller already holds the
     /// [`LibraryIndex`] these came from, so
     /// copying rows out would be duplicating what it can look up in constant
-    /// time. This is also exactly what `Event::QueryResult` carries.
+    /// time.
     pub tracks: Vec<TrackId>,
     pub album_artists: FilterPane,
     pub albums: AlbumPane,

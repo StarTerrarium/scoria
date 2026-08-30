@@ -1,8 +1,9 @@
 //! Query specification.
 //!
 //! `Selection` describes what to show; turning it into SQL is the repository
-//! layer's job (M4). It is defined here because `Command::Query` carries it
-//! across the seam, so its shape is part of the contract.
+//! layer's job (M4). It is defined here because `Session::query` takes it: it
+//! is a frontend's description of what to show, so its shape is part of the
+//! contract even though it does not travel as a command (`DESIGN.md` §3.2).
 
 pub mod engine;
 pub mod index;

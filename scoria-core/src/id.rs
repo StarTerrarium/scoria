@@ -41,8 +41,3 @@ id_type! {
     /// Identifies one album, resolved by the ladder in `DESIGN.md` §4.2.
     AlbumId
 }
-
-id_type! {
-    /// Correlates a `Command::Query` with the `Event::QueryResult` answering it.
-    QueryId
-}

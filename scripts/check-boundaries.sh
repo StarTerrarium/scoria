@@ -213,4 +213,48 @@ if [ -d scoria-gui/src/widgets ]; then
   fi
 fi
 
+# Invariant 2 / DESIGN.md 3.2: a command nothing sends is not part of the seam.
+#
+# The same mistake as the widget check above, one layer down. `command.rs` is
+# the first file anyone reads to understand this architecture, so a variant
+# listed there is a claim that some frontend sends it. Four of them were not:
+# `Play` bypassed the play-behaviour setting, `Rescan` dispatched to a blocking
+# foreground scan, `SetRoot` duplicated the method the GUI actually calls, and
+# `Query` answered with an event carrying too little to render.
+#
+# Dead is the mild version of the problem. The real one is that each was a trap
+# for the next frontend, which would have had no way to know the path was never
+# taken.
+#
+# So: every `Command` variant is constructed somewhere other than the enum
+# itself. Match arms do not count -- handling a command is not sending one --
+# so lines where the variant sits left of a `=>` are dropped. That filter has
+# to be `Command::V[^=]*=>` and not a bare `=>`, or genuine construction sites
+# like `Message::X => Command::Seek(p)` are dropped with the patterns.
+variants=$(sed -n '/^pub enum Command/,/^}/p' scoria-core/src/command.rs \
+  | grep -oE '^    [A-Z][A-Za-z]*' | tr -d ' ')
+
+if [ -z "$variants" ]; then
+  fail "could not read the Command enum; this check is not running"
+else
+  unsent=$(
+    for v in $variants; do
+      n=$(grep -rn "Command::$v\b" scoria-core/src scoria-gui/src scoria-bin/src 2>/dev/null \
+        | grep -v '^scoria-core/src/command.rs:' \
+        | grep -vE "Command::$v\b[^=]*=>" \
+        | grep -vE ':[[:space:]]*(//|\*)' \
+        | wc -l)
+      [ "$n" -eq 0 ] && echo "Command::$v"
+    done
+  )
+
+  if [ -n "$unsent" ]; then
+    fail "a command nothing sends:"
+    echo "$unsent" | sed 's/^/       /'
+    echo "     A variant no frontend constructs is a seam that was never tested."
+  else
+    pass "every command has a sender"
+  fi
+fi
+
 exit $status

@@ -488,7 +488,6 @@ impl App {
                     self.status = String::new();
                 }
                 CoreEvent::Error(e) => self.status = format!("{e}"),
-                CoreEvent::QueryResult(..) => {}
             }
         }
 

@@ -20,6 +20,10 @@ Only `Command` in, `Event` out. Both stay serialisable.
 
 *How to tell you have broken it:* a view function calls a method on a library, database, or playback object. If a handler reads `self.library.something()` or `self.player.something()`, that is the violation.
 
+The other direction fails more quietly: a `Command` variant that exists and that
+nothing sends. It reads as part of the contract, it is never exercised, and the
+next frontend takes it at its word.
+
 ### 3. Layouts are one implementation
 
 Three layouts exist and differ only by `BrowserPlacement { Off, Top, Left }`. The table, columns, transport bar, search, selection model and keybinds are shared.
@@ -155,13 +159,16 @@ cannot express: core's dependency graph is free of UI crates, there is only one
 track table, iced `Color` never leaves `theme/`, raw SQL never leaves `db/`, no
 panic lint has been `allow`ed outside a test module, every `Column` is offered
 in the panel that turns it on, nothing in the dependency graph can reach the
-internet, and no `pub fn` under `widgets/` is left without a caller.
+internet, no `pub fn` under `widgets/` is left without a caller, and every
+`Command` variant has a sender.
 
-That last one exists because a helper nobody calls is a feature nobody sees.
-It has happened: the now-playing marker `DESIGN.md` §11 requires shipped with
-a constant, a commit message and 26 passing tests, and the table never called
-it. Unit tests do not catch this, because they call the helper directly --
-which is the seam that broke.
+The last two are the same rule at two scales: code nobody reaches is a feature
+nobody sees. It has happened twice. The now-playing marker `DESIGN.md` §11
+requires shipped with a constant, a commit message and 26 passing tests, and
+the table never called it. Then four `Command` variants shipped that no
+frontend sent -- and unlike the marker, each was a trap for whoever sent one
+first (`DESIGN.md` §3.2). Unit tests do not catch either, because they call the
+thing directly, which is the seam that broke.
 
 CI runs it on every push. Run it before committing; if you add an invariant to
 this file, add a check for it there too.

@@ -3,7 +3,7 @@
 //! The other half of the seam (`DESIGN.md` §3.2).
 
 use crate::error::CoreError;
-use crate::id::{QueryId, TrackId};
+use crate::id::TrackId;
 use crate::playback::PlaybackSource;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -54,7 +54,6 @@ pub enum Event {
     },
     PositionChanged(Duration),
     QueueChanged(PlaybackSource),
-    QueryResult(QueryId, Vec<TrackId>),
     ScanProgress {
         seen: usize,
         total: Option<usize>,

@@ -29,7 +29,7 @@ pub use date::Date;
 pub use db::{AlbumRepository, NewAlbum, NewTrack, SqliteDatabase, TrackRepository};
 pub use error::CoreError;
 pub use event::{Event, LibraryDelta, PlaybackState};
-pub use id::{AlbumId, QueryId, TrackId};
+pub use id::{AlbumId, TrackId};
 pub use library::{AlbumIdentity, Artwork, ArtworkCache, ScanOutcome, ScanProgress, Scanner};
 pub use model::{Album, GainMode, ReplayGain, Timestamp, Track};
 pub use path::RelativePath;

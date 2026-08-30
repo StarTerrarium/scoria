@@ -13,10 +13,10 @@
 //! ## What it is for
 //!
 //! A mouse had no way to reach a track's metadata; `Ctrl+I` was the only path
-//! to §9.3's properties. It also turned out to be the missing door for two
-//! features that were built and could not be reached: §6.4's "play just this
+//! to §9.3's properties. It also turned out to be the missing door for a
+//! feature that was built and could not be reached: §6.4's "play just this
 //! album", whose two stated routes -- a group header and the album pane -- do
-//! not exist, and `Command::Play` for a single track.
+//! not exist.
 //!
 //! This module knows what the items are and where the panel goes. It does not
 //! know what any of them mean; the application decides that.

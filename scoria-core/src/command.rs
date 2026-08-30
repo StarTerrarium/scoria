@@ -1,16 +1,19 @@
 //! Commands travelling from a frontend into the core.
 //!
 //! One half of the seam (`DESIGN.md` §3.2). Serialisable from the start: 1.0 is
-//! not a daemon, but the seam is daemon-shaped, so putting a socket in the
-//! middle later is mechanical rather than a rewrite. It is also what makes the
-//! TUI cheap.
+//! not a daemon, but the write side is daemon-shaped, so putting a socket in
+//! the middle later is mechanical rather than a rewrite. It is also what makes
+//! the TUI cheap.
+//!
+//! Reads are not here. A frontend calls `Session::query` and gets a
+//! `QueryOutcome` back, because what it renders is the filter panes and groups
+//! as well as the tracks, and those do not fit through an event carrying ids.
+//! There was a `Command::Query` for a while; nothing ever sent it (§3.2).
 
-use crate::id::{AlbumId, QueryId, TrackId};
+use crate::id::{AlbumId, TrackId};
 use crate::playback::RepeatMode;
-use crate::query::Selection;
 use crate::query::sort::SortChain;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::time::Duration;
 
 /// What to snapshot when playback starts.
@@ -40,8 +43,6 @@ pub enum SourceSpec {
 /// Everything a frontend can ask the core to do.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Command {
-    /// Play one track, snapshotting just it.
-    Play(TrackId),
     /// Snapshot `source` and start at `at`.
     PlayFrom {
         source: SourceSpec,
@@ -77,8 +78,4 @@ pub enum Command {
     SetPosition(usize),
     SetShuffle(bool),
     SetRepeat(RepeatMode),
-    /// Run a query; the answer arrives as `Event::QueryResult` with this id.
-    Query(QueryId, Selection),
-    Rescan,
-    SetRoot(PathBuf),
 }

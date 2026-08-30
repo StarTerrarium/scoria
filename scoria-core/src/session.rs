@@ -16,7 +16,7 @@ use crate::db::repository::TrackRepository;
 use crate::db::sqlite::SqliteDatabase;
 use crate::error::CoreError;
 use crate::event::{Event, PlaybackState};
-use crate::id::{AlbumId, QueryId, TrackId};
+use crate::id::{AlbumId, TrackId};
 use crate::library::artwork::ArtworkKey;
 use crate::library::scanner::{ScanOutcome, ScanProgress, Scanner};
 use crate::library::{ArtworkCache, LibraryWatcher};
@@ -521,10 +521,6 @@ impl Session {
 
     fn dispatch(&mut self, command: Command) -> Result<(), CoreError> {
         match command {
-            Command::Play(id) => {
-                let source = PlaybackSource::new(vec![id], Origin::Library);
-                self.start(source)
-            }
             Command::PlayFrom { source, at } => {
                 let source = self.materialise(&source, at)?;
                 self.start(source)
@@ -547,24 +543,7 @@ impl Session {
             Command::SetPosition(p) => self.send_to_engine(EngineCommand::SetPosition(p)),
             Command::SetShuffle(on) => self.send_to_engine(EngineCommand::SetShuffle(on)),
             Command::SetRepeat(mode) => self.send_to_engine(EngineCommand::SetRepeat(mode)),
-            Command::Query(id, selection) => {
-                let outcome = self.query(&selection)?;
-                self.emit(Event::QueryResult(id, outcome.tracks));
-                Ok(())
-            }
-            Command::Rescan => self.rescan(&mut |_| {}).map(|_| ()),
-            Command::SetRoot(root) => self.set_root(root),
         }
-    }
-
-    /// Convenience for frontends: run a selection and get an id back for
-    /// correlating the result.
-    ///
-    /// # Errors
-    ///
-    /// [`CoreError::Database`] if the query fails.
-    pub fn submit_query(&mut self, id: QueryId, selection: Selection) -> Result<(), CoreError> {
-        self.handle(Command::Query(id, selection))
     }
 
     // ------------------------------------------------------------ playback --

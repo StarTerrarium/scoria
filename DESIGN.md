@@ -65,7 +65,6 @@ The frontend never calls into core internals. It sends commands and consumes eve
 
 ```rust
 pub enum Command {
-    Play(TrackId),
     PlayFrom { source: SourceSpec, at: TrackId },
     Pause,
     Resume,
@@ -79,9 +78,6 @@ pub enum Command {
     SetPosition(usize),
     SetShuffle(bool),
     SetRepeat(RepeatMode),
-    Query(QueryId, Selection),
-    Rescan,
-    SetRoot(PathBuf),
 }
 
 pub enum SourceSpec {
@@ -95,7 +91,6 @@ pub enum Event {
     TrackChanged { track: TrackId, position: usize },
     PositionChanged(Duration),
     QueueChanged(PlaybackSource),
-    QueryResult(QueryId, Vec<TrackId>),
     ScanProgress { seen: usize, total: Option<usize> },
     LibraryChanged(LibraryDelta),
     ScanFinished,
@@ -114,7 +109,29 @@ to decide what plays, which states invariant 5 as a type rather than as a rule.
 `playerctl` will send whether or not we want one, and answering it by pausing
 would be a lie.
 
-Both enums derive `Serialize`/`Deserialize` from the start. We are not building a daemon in 1.0, but the seam is daemon-shaped, so putting a socket in the middle later is mechanical rather than a rewrite. It is also what makes the TUI cheap.
+**Commands are the write side only.** Four variants were specified here that no
+frontend ever sent, and each was a trap rather than merely dead. `Play(TrackId)`
+snapshotted a single track, bypassing the §6.3 play-behaviour setting the user
+had chosen. `Rescan` dispatched to a blocking foreground scan with the progress
+callback discarded, so a GUI that sent it would freeze; the real path is
+`request_rescan`, which pokes the watcher thread and reports progress as events.
+`SetRoot(PathBuf)` duplicated the method the GUI calls for its inline `Result`.
+And `Query(QueryId, Selection)` was answered by `QueryResult(QueryId,
+Vec<TrackId>)`, which is not enough to draw anything: a frontend renders the
+filter panes and the groups too, and those do not fit through an event carrying
+ids.
+
+So reads are not commands. A frontend calls `Session::query(&Selection)` and
+gets a whole `QueryOutcome` -- tracks, album-artist pane, album pane, groups --
+back synchronously. That is the honest shape, and `scripts/check-boundaries.sh`
+now fails the build on a `Command` variant nothing constructs, so the next one
+cannot be specified into existence and left unsent.
+
+Both enums derive `Serialize`/`Deserialize` from the start. We are not building
+a daemon in 1.0, but the command side is daemon-shaped, so putting a socket in
+the middle later is mechanical rather than a rewrite. A remote frontend would
+need an answer for reads as well -- `QueryOutcome` is serialisable, so that is a
+response type to add, not a redesign. It is also what makes the TUI cheap.
 
 ### 3.3 Threading
 
