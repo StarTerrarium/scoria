@@ -100,3 +100,83 @@ impl<S: Source> Source for Cancellable<S> {
         self.inner.try_seek(position)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use rodio::buffer::SamplesBuffer;
+
+    /// A second of mono audio at a rate that divides evenly, so a seek lands
+    /// somewhere arithmetic rather than somewhere approximate.
+    fn source() -> SamplesBuffer {
+        let channels = ChannelCount::new(1).unwrap_or(ChannelCount::MIN);
+        let rate = SampleRate::new(1000).unwrap_or(SampleRate::MIN);
+        SamplesBuffer::new(channels, rate, vec![0.5_f32; 1000])
+    }
+
+    #[test]
+    fn an_uncancelled_source_yields_everything_the_inner_one_does() {
+        let expected = source().count();
+        let wrapped = Cancellable::new(source(), Cancel::new());
+        assert_eq!(wrapped.count(), expected);
+    }
+
+    #[test]
+    fn a_cancelled_source_ends_rather_than_playing() {
+        // This is the whole mechanism: rodio's Player cannot un-append, and
+        // `clear` would skip the current track too, so retracting a preload
+        // means making the queued source end early.
+        let cancel = Cancel::new();
+        cancel.cancel();
+        let wrapped = Cancellable::new(source(), cancel);
+        assert_eq!(wrapped.count(), 0);
+    }
+
+    #[test]
+    fn cancelling_part_way_through_stops_it_there() {
+        // Checked per sample rather than once at the start, so cancelling
+        // takes effect on a source that has already begun.
+        let cancel = Cancel::new();
+        let mut wrapped = Cancellable::new(source(), cancel.clone());
+
+        assert!(wrapped.next().is_some());
+        assert!(wrapped.next().is_some());
+        cancel.cancel();
+        assert!(wrapped.next().is_none(), "it kept going after cancelling");
+    }
+
+    #[test]
+    fn seeking_reaches_the_source_underneath() {
+        // The regression this type caused once already. `Source::try_seek`
+        // defaults to reporting that seeking is unsupported, so a wrapper that
+        // does not forward it silently breaks seeking for everything below --
+        // and it surfaced as an error naming this type rather than as anything
+        // to do with gapless.
+        let mut wrapped = Cancellable::new(source(), Cancel::new());
+        assert!(
+            wrapped.try_seek(Duration::from_millis(500)).is_ok(),
+            "seeking stopped at the wrapper"
+        );
+        // Seeking half way through leaves half the samples.
+        assert_eq!(wrapped.count(), 500);
+    }
+
+    #[test]
+    fn the_stream_describes_itself_the_way_the_source_does() {
+        // rodio mixes by these. A wrapper reporting its own answer would
+        // resample or remix whatever it wrapped.
+        let inner = source();
+        let (channels, rate, duration) = (
+            inner.channels(),
+            inner.sample_rate(),
+            inner.total_duration(),
+        );
+
+        let wrapped = Cancellable::new(source(), Cancel::new());
+        assert_eq!(wrapped.channels(), channels);
+        assert_eq!(wrapped.sample_rate(), rate);
+        assert_eq!(wrapped.total_duration(), duration);
+    }
+}
