@@ -52,15 +52,20 @@
 
   <launchable type="desktop-id">io.github.starterrarium.Scoria.desktop</launchable>
 
-  <!-- Required by Flathub, and the one thing still missing. See the commented
-       block in README.md for the three worth taking. Replace this whole element.
   <screenshots>
     <screenshot type="default">
       <image>https://raw.githubusercontent.com/StarTerrarium/scoria/main/docs/screenshot-left.png</image>
       <caption>Browsing a library with the browser on the left</caption>
     </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/StarTerrarium/scoria/main/docs/screenshot-top.png</image>
+      <caption>The same library with the browser across the top</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/StarTerrarium/scoria/main/docs/screenshot-queue.png</image>
+      <caption>The queue, showing the snapshot that is playing</caption>
+    </screenshot>
   </screenshots>
-  -->
 
   <categories>
     <category>AudioVideo</category>

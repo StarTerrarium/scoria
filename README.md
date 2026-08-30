@@ -45,19 +45,17 @@ or don't run it.
 > and a ratatui frontend are deliberately post-1.0; [`DESIGN.md`](DESIGN.md)
 > says why for each.
 
-<!-- Screenshots go here. Drop the files in docs/ and uncomment:
-
-![The Left layout](docs/screenshot-left.png)
+![The album artist and album panes on the left, a grouped track table filling the
+rest of the window, and a track playing in the transport bar](docs/screenshot-left.png)
 
 |  |  |
 |---|---|
-| ![Browser on top](docs/screenshot-top.png) | ![The track menu](docs/screenshot-menu.png) |
+| ![The same library with the browser across the top, filtered to one album artist](docs/screenshot-top.png) | ![The queue overlay, showing the snapshot that is playing while the browser is filtered to something else](docs/screenshot-queue.png) |
 
-Worth showing: the Left layout with both filter panes populated and a track
-playing, so the artwork and transport are not empty; the Top layout, because it
-is the one that looks least like other players; and the track menu open, since
-it is the main mouse path added late.
--->
+*Left: the browser on the left. Middle: the browser on top, filtered. Right: the
+queue, playing a snapshot taken from one artist while the table shows another —
+§6.2's rule that browsing never disturbs playback, which is easier to see than
+to describe.*
 
 ## What it does
 
