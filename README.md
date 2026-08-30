@@ -10,10 +10,25 @@ configuration.
 It is aimed at someone with a well-organised local library who listens to whole
 albums and wants to see a lot of information at once.
 
-> **Status: approaching 1.0.** The player works: scanning and watching, three
-> layouts, gapless playback, shuffle and repeat, ReplayGain, artwork, the queue,
-> search and filtering, settings, and the desktop's media keys. What is left
-> before 1.0 is packaging and documentation, not features.
+> **Status: 1.0.** Scanning and watching, three layouts, gapless playback,
+> shuffle and repeat, ReplayGain, artwork, the queue, search and filtering,
+> settings, and the desktop's media keys. Playlists, tag editing, vim bindings
+> and a ratatui frontend are deliberately post-1.0; [`DESIGN.md`](DESIGN.md)
+> says why for each.
+
+<!-- Screenshots go here. Drop the files in docs/ and uncomment:
+
+![The Left layout](docs/screenshot-left.png)
+
+|  |  |
+|---|---|
+| ![Browser on top](docs/screenshot-top.png) | ![The track menu](docs/screenshot-menu.png) |
+
+Worth showing: the Left layout with both filter panes populated and a track
+playing, so the artwork and transport are not empty; the Top layout, because it
+is the one that looks least like other players; and the track menu open, since
+it is the main mouse path added late.
+-->
 
 ## What it does
 

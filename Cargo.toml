@@ -3,7 +3,7 @@ resolver = "3"
 members = ["scoria-core", "scoria-bin", "scoria-gui"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 # Floor is set by lofty (1.89); iced needs 1.88, rodio 1.87.
 rust-version = "1.89"
