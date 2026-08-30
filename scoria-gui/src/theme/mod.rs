@@ -22,7 +22,7 @@ pub mod roles;
 pub use colour::Colour;
 pub use roles::Roles;
 
-use iced::widget::{button, container, rule, scrollable, slider, text, text_input};
+use iced::widget::{button, canvas, container, rule, scrollable, slider, text, text_input};
 use iced::{Background, Border, Color, border};
 use serde::{Deserialize, Serialize};
 
@@ -488,6 +488,91 @@ pub struct RowState {
     pub playing: bool,
     pub alternate: bool,
     pub available: bool,
+}
+
+/// How much of the eye an icon is meant to take (§8).
+///
+/// The transport's left cluster moves through what is playing now and is
+/// reached for constantly. The right cluster changes what happens next and is
+/// set once and forgotten. That is a real difference and it should be visible
+/// -- deliberately, rather than because two fallback fonts disagreed, which is
+/// where the difference used to come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Emphasis {
+    /// Previous, play/pause, next.
+    Primary,
+    /// Shuffle, repeat, jump to playing, queue.
+    Secondary,
+}
+
+/// What an icon needs from the theme in order to be drawn.
+///
+/// The same shape as [`RowState`]: the widget says what it is, the theme says
+/// what colour that is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IconState {
+    pub emphasis: Emphasis,
+    /// A toggle that is on.
+    ///
+    /// Never the only signal. §11 refuses to let colour alone carry the
+    /// now-playing row, and a toggle is no different -- the icon carries a
+    /// mark as well, which is the part that survives not being able to tell
+    /// the accent from the muted text.
+    pub active: bool,
+    pub hovered: bool,
+}
+
+/// What an icon draws with.
+///
+/// A pen rather than a colour, because a widget that never names a colour
+/// cannot start a second theme system by accident -- which is what §11 is
+/// protecting. `widgets/icon.rs` asks for a fill or a stroke; the conversion
+/// out of our vocabulary stays in this module, as it does for text and rows.
+#[derive(Debug, Clone, Copy)]
+pub struct IconPen {
+    ink: Color,
+}
+
+impl IconPen {
+    /// For a solid shape: a triangle, a bar.
+    #[must_use]
+    pub fn fill(self) -> canvas::Fill {
+        canvas::Fill::from(self.ink)
+    }
+
+    /// For a drawn line: an arrow, a ring.
+    #[must_use]
+    pub fn stroke<'a>(self, width: f32) -> canvas::Stroke<'a> {
+        canvas::Stroke::default()
+            .with_width(width)
+            .with_color(self.ink)
+            // Round, so the arms of a shuffle or a repeat meet cleanly and do
+            // not leave square nubs at fourteen pixels.
+            .with_line_cap(canvas::LineCap::Round)
+    }
+}
+
+impl Theme {
+    /// What an icon draws with, given what it is and what it is doing.
+    #[must_use]
+    pub fn icon_pen(&self, state: IconState) -> IconPen {
+        let base = match (state.active, state.emphasis) {
+            (true, _) => self.roles.accent,
+            (false, Emphasis::Primary) => self.roles.text,
+            (false, Emphasis::Secondary) => self.roles.text_muted,
+        };
+        // Hovering brightens what is not already accented. An active toggle
+        // keeps its colour, so its state does not flicker as the pointer
+        // crosses it -- the button's own background tint is the hover feedback
+        // there, and for the primary icons, which are already at full strength.
+        IconPen {
+            ink: colour(if state.hovered && !state.active {
+                self.roles.text
+            } else {
+                base
+            }),
+        }
+    }
 }
 
 /// Our colour into iced's. The boundary, in one function.

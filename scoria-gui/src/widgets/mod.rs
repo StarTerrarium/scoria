@@ -4,6 +4,7 @@
 //! describes. Layouts arrange these; they never define their own.
 
 pub mod columns;
+pub mod icon;
 pub mod panes;
 pub mod table;
 pub mod transport;

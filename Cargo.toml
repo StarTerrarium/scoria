@@ -24,7 +24,18 @@ scoria-gui = { path = "scoria-gui" }
 #
 # GUI only: scoria-core still has no image dependency, because it stores
 # artwork exactly as found rather than rescaling it (DESIGN.md 5.3).
-iced = { version = "0.14", features = ["tokio", "image-without-codecs"] }
+# `canvas` is for the transport's icons, which are drawn rather than typed.
+# What it replaces: depending on whichever font the machine happens to have.
+# Noto Sans -- what iced resolves SansSerif to -- carries none of the media
+# symbols, so every one of them fell back, and the ones only a colour emoji
+# font covered arrived orange with their colours baked in, past the theme.
+# See DESIGN.md 8. It enables iced_graphics/geometry, which is lyon: iced's
+# own tessellator rather than a foreign one.
+iced = { version = "0.14", features = [
+    "tokio",
+    "image-without-codecs",
+    "canvas",
+] }
 
 # Audio. rodio drives Symphonia itself through its own feature flags, so a direct
 # symphonia dependency is not needed until gapless trimming (DESIGN.md 3.4) wants

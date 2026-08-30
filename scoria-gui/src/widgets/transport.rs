@@ -10,6 +10,7 @@
 
 use crate::theme::Theme;
 use crate::widgets::format_duration;
+use crate::widgets::icon::{self, Icon};
 use iced::widget::{Space, button, column, container, mouse_area, row, slider, text, tooltip};
 use iced::{Alignment, Element, Fill, Length};
 use scoria_core::event::PlaybackState;
@@ -114,8 +115,10 @@ pub fn view<'a, Message: Clone + 'a>(
     // Copied out before the closures below, which outlive the borrow.
     let volume = transport.volume;
 
-    let symbol = move |glyph: &'static str, hint: &'static str, event: Event, active: bool| {
-        let control = button(text(glyph).size(15))
+    // Drawn, not typed. See `widgets::icon` -- the symbols used to be whatever
+    // the machine's fonts supplied, which is why some of them arrived orange.
+    let symbol = move |icon: Icon, hint: &'static str, event: Event, active: bool| {
+        let control = button(icon::view(icon, active))
             .padding([2, 8])
             .on_press(on_event(event))
             .style(move |t: &Theme, status| t.transport_button(status, active));
@@ -209,17 +212,17 @@ pub fn view<'a, Message: Clone + 'a>(
 
     let bar = row![
         artwork,
-        symbol("⏮", "Previous", Event::Previous, false),
+        symbol(Icon::Previous, "Previous", Event::Previous, false),
         symbol(
             match transport.state {
-                PlaybackState::Playing => "⏸",
-                PlaybackState::Paused | PlaybackState::Stopped => "▶",
+                PlaybackState::Playing => Icon::Pause,
+                PlaybackState::Paused | PlaybackState::Stopped => Icon::Play,
             },
             "Play or pause",
             Event::PlayPause,
             false,
         ),
-        symbol("⏭", "Next", Event::Next, false),
+        symbol(Icon::Next, "Next", Event::Next, false),
         now_playing,
         time(format_duration(shown_position)),
         seek,
@@ -227,22 +230,37 @@ pub fn view<'a, Message: Clone + 'a>(
         // Shuffle and repeat sit past the seek bar rather than among the
         // transport buttons: they change what happens next, which is a
         // different kind of thing from moving through what is playing now.
-        symbol("⇄", "Shuffle", Event::ToggleShuffle, transport.shuffled),
+        symbol(
+            Icon::Shuffle,
+            "Shuffle",
+            Event::ToggleShuffle,
+            transport.shuffled,
+        ),
         symbol(
             match transport.repeat {
-                RepeatMode::One => "⟳1",
-                RepeatMode::Off | RepeatMode::All => "⟳",
+                RepeatMode::One => Icon::RepeatOne,
+                RepeatMode::Off | RepeatMode::All => Icon::Repeat,
             },
             "Repeat",
             Event::CycleRepeat,
             transport.repeat != RepeatMode::Off,
         ),
-        // §8: a crosshair, matching the "reveal current item" convention from
+        // §8: a target, matching the "reveal current item" convention from
         // editors and file managers.
-        symbol("⌖", "Jump to what is playing", Event::JumpToPlaying, false),
+        symbol(
+            Icon::JumpToPlaying,
+            "Jump to what is playing",
+            Event::JumpToPlaying,
+            false,
+        ),
         // The queue needs a way in that does not require knowing a keybinding.
         // §10 makes the keyboard a complete path, not the only one.
-        symbol("≡", "Queue", Event::ToggleQueue, transport.queue_open),
+        symbol(
+            Icon::Queue,
+            "Queue",
+            Event::ToggleQueue,
+            transport.queue_open
+        ),
         // The wheel changes the volume while the pointer is over the bar,
         // which is where a hand already is when it wants to. `mouse_area`
         // hands the event to the slider first and only sees what the slider

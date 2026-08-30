@@ -531,7 +531,17 @@ It is written once the volume stops moving rather than on every change -- a drag
 
 The volume bar takes the mouse wheel while the pointer is over it, a twentieth of the range per notch. Dragging still works: the wheel handler wraps the slider and only sees events the slider ignored. It clamps rather than wrapping, because a wheel that rolled past full and started again at silence would be a genuinely unpleasant surprise on a control people spin.
 
-Symbol buttons only, with hover tooltips. Glyphs have to be ones a system font actually has -- the first attempt used U+2928 for shuffle, which is neither a shuffle symbol nor present in the default font, and rendered as a cross. Jump-to-playing uses a crosshair/target glyph, matching the "reveal current item" convention from editors and file managers.
+**Symbol buttons only, with hover tooltips, and the symbols are drawn rather than typed.**
+
+They were characters, and that meant the application had no say in how its own controls looked. `Noto Sans` -- what iced resolves `SansSerif` to on an ordinary desktop -- carries none of the media symbols, so every one of them fell back, and which font caught it depended on what else happened to cover that codepoint. `⏮ ⏸ ⏭` are covered by little besides a colour emoji font, so they arrived orange with their colours inside the glyph, past the theme entirely; `▶ ⇄ ⟳ ≡` are in ordinary text fonts and came out monochrome and themed. The transport was two visual languages in one row, chosen by nobody and different on every machine -- and the play button did not match the pause button it replaces, because those two are not covered by the same set of fonts.
+
+An earlier version of this section drew the lesson "use glyphs a system font actually has", after U+2928 rendered as a cross. That treated the symptom. The symbols are geometry now: triangles, bars, an arc and straight strokes, filled with a colour the theme hands over. They are the same on every machine, they follow the theme because they are filled with it, and no font can change them.
+
+Jump-to-playing is a target, matching the "reveal current item" convention from editors and file managers.
+
+**The transport reads as two tiers.** The left cluster moves through what is playing now and is reached for constantly; the right cluster changes what happens next and is set once and forgotten. So the left is drawn larger and at full text strength, the right smaller and muted, with play and pause largest of all as the anchor. That difference was already there by accident, in the shape of two fallback fonts disagreeing; making it deliberate costs nothing and means it survives a change of machine.
+
+**An active toggle is not signalled by colour alone.** Shuffle and repeat take the accent when they are on, and also carry a bar beneath the icon. This is §11's rule about the now-playing row applied where it equally belongs: someone who cannot separate the accent from the muted text can still see that shuffle is on. Repeat-one is a third state and gets a shape of its own -- a bar through the middle of the loop -- rather than another colour.
 
 Tooltips only solve discovery for mouse users, and this is a keyboard-navigable application. A keybinding cheatsheet on `?` covers the other path.
 
