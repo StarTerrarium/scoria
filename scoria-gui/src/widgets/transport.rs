@@ -31,17 +31,23 @@ const VOLUME_STEP: f32 = 0.05;
 /// it wrong makes a trackpad faster or slower than a wheel, not broken.
 const PIXELS_PER_NOTCH: f32 = 50.0;
 
-/// How tall the seek bar is to the pointer.
+/// How tall a slider is to the pointer.
 ///
 /// Not how thick it looks. The theme draws a 3px rail and a 10px handle, and
 /// both are centred in whatever box they are given, so this decides only what
 /// answers a click.
 ///
-/// It was 6px -- smaller than the handle drawn on it, so the target you could
-/// see was bigger than the one that responded, and catching it mid-drag took
-/// aim. iced hit-tests a slider against its layout rectangle, and its own
-/// default height is 16, which the volume bar beside this one has always used.
-const SEEK_HEIGHT: f32 = 16.0;
+/// The seek bar was 6px -- smaller than the handle drawn on it, so the target
+/// you could see was bigger than the one that responded, and catching it
+/// mid-drag took aim. iced hit-tests a slider against its layout rectangle,
+/// and its own default height is 16.
+///
+/// **Both sliders read this.** The volume bar was already 16px, by never
+/// having overridden the default, so for a while the two agreed by accident.
+/// They are the same control drawn at two widths and they should take the same
+/// aim, which is a fact worth holding in one place rather than leaving to two
+/// defaults that happen to match.
+const SLIDER_HEIGHT: f32 = 16.0;
 
 /// The volume after a scroll over the bar.
 ///
@@ -184,13 +190,13 @@ pub fn view<'a, Message: Clone + 'a>(
             move |v| on_event(Event::Scrub(v)),
         )
         .step(0.1_f32)
-        .height(SEEK_HEIGHT)
+        .height(SLIDER_HEIGHT)
         .on_release(on_event(Event::SeekTo(shown_position)))
         .width(Fill)
         .into()
     } else {
         Space::new()
-            .height(Length::Fixed(SEEK_HEIGHT))
+            .height(Length::Fixed(SLIDER_HEIGHT))
             .width(Fill)
             .into()
     };
@@ -246,6 +252,7 @@ pub fn view<'a, Message: Clone + 'a>(
                 Event::SetVolume(v)
             ))
             .step(0.01)
+            .height(SLIDER_HEIGHT)
             .width(Length::Fixed(90.0)),
         )
         .on_scroll(move |delta| on_event(Event::SetVolume(scrolled_volume(volume, delta)))),
@@ -273,11 +280,14 @@ mod tests {
     }
 
     #[test]
-    fn the_seek_bar_is_at_least_as_tall_as_the_handle_drawn_on_it() {
-        // It was not. iced hit-tests a slider against its layout rectangle, so
-        // the height is the whole of what answers a click -- and at 6px it was
-        // smaller than the 10px handle the theme draws on it. The target you
-        // could see was bigger than the one that responded.
+    fn a_slider_is_at_least_as_tall_as_the_handle_drawn_on_it() {
+        // The seek bar was not. iced hit-tests a slider against its layout
+        // rectangle, so the height is the whole of what answers a click -- and
+        // at 6px it was smaller than the 10px handle the theme draws on it.
+        // The target you could see was bigger than the one that responded.
+        //
+        // Covers the volume bar too, because both read one constant and the
+        // theme styles every slider the same way.
         //
         // Asked of the theme rather than written down here, so that growing the
         // handle without growing the box it lives in fails rather than quietly
@@ -288,8 +298,8 @@ mod tests {
                 continue;
             };
             assert!(
-                SEEK_HEIGHT >= radius * 2.0,
-                "{}: a {}px handle in a {SEEK_HEIGHT}px box",
+                SLIDER_HEIGHT >= radius * 2.0,
+                "{}: a {}px handle in a {SLIDER_HEIGHT}px box",
                 theme.name,
                 radius * 2.0
             );
