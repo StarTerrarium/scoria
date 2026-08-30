@@ -547,7 +547,13 @@ Jump-to-playing is a target, matching the "reveal current item" convention from 
 
 Tooltips only solve discovery for mouse users, and this is a keyboard-navigable application. A keybinding cheatsheet on `?` covers the other path.
 
-**Shift is not a modifier on a character binding.** It is how the character was produced -- `?` is Shift+`/` on most layouts, and on others it is somewhere else entirely -- so a binding that requires shift to be *absent* on a character describes a keypress nobody can make. `?` was bound that way and never opened anything; only F1 did, quietly, for as long as the binding existed. Matching therefore ignores shift when the trigger is a character, which loses nothing that was not already lost, since triggers fold case and `Shift+f` was already the same trigger as `f`. On a named key shift stays a modifier, because there it means something: Shift+Down extends a selection.
+**A key press is two keys, and binding a character needs both.** iced reports the key without modifiers *and* the key with them applied: pressing Shift+`/` arrives as `/` and as `?` at the same time. A binding on `?` can only ever match the second. Reading only the first meant `?` was unbindable, and the cheatsheet opened on F1 alone for as long as the binding existed.
+
+Both are consulted, the typed character first and the key underneath it second. The fallback is what keeps `Ctrl` chords working: a chord is on the key, not on what that key would have typed, and a platform is free to report a control character as the modified key.
+
+**Shift is then not a modifier on a character binding**, because it is how the character was produced -- `?` is Shift+`/` here and somewhere else on another layout. Requiring shift to be absent describes a press nobody can make. Matching ignores it when the trigger is a character, which loses nothing that was not already lost, since triggers fold case and `Shift+f` was already the same trigger as `f`. On a named key shift stays a modifier, because there it means something: Shift+Down extends a selection.
+
+Fixing the second without the first is worse than neither: `?` still arrives as `/`, the shift that distinguished it is discarded, and Shift+`/` opens the search.
 
 **The cheatsheet is generated from the keymap, not written out.** §10 already makes the keymap a data structure, and that is what makes this possible: a binding that changes changes the list, and one that is removed disappears from it. A hand-written list of shortcuts is wrong the first time anyone edits the keymap and stays wrong until someone notices. Actions carry the heading they belong under, so a new action fails to compile until it has a home -- a list kept in the overlay would simply leave it out, silently. And by its own rule the cheatsheet has a button too: it opens from **Shortcuts** in the header as well as from `?`.
 

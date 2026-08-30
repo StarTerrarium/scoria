@@ -1723,9 +1723,10 @@ impl App {
             match event {
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     ref key,
+                    ref modified_key,
                     modifiers,
                     ..
-                }) => resolve_key(key, modifiers).map(Message::Action),
+                }) => resolve_key(key, modified_key, modifiers).map(Message::Action),
                 // Tracked separately because a mouse click carries no
                 // modifiers of its own, and shift-click has to know.
                 iced::Event::Keyboard(iced::keyboard::Event::ModifiersChanged(modifiers)) => Some(
@@ -1765,8 +1766,28 @@ fn publish_keymap(keymap: &Keymap) {
 }
 
 /// What a key press means, according to the published keymap.
-fn resolve_key(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> Option<Action> {
-    KEYMAP.with(|published| published.borrow().resolve_iced(key, modifiers))
+///
+/// iced hands over two keys and they are not interchangeable. `key` is
+/// `key_without_modifiers`, so Shift+`/` arrives as `/`; `modified_key` is the
+/// logical key, so the same press arrives as `?`. A binding on `?` can only
+/// ever match the second, which is why binding it did nothing at all for as
+/// long as this read only the first.
+///
+/// The typed character is tried first, then the key underneath it. The
+/// fallback is what keeps `Ctrl`-chords working wherever a modified key comes
+/// back as something other than the character -- the chord is on the key, not
+/// on what it would have typed.
+fn resolve_key(
+    key: &iced::keyboard::Key,
+    modified_key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> Option<Action> {
+    KEYMAP.with(|published| {
+        let keymap = published.borrow();
+        keymap
+            .resolve_iced(modified_key, modifiers)
+            .or_else(|| keymap.resolve_iced(key, modifiers))
+    })
 }
 
 const fn next_repeat(current: RepeatMode) -> RepeatMode {
@@ -1932,6 +1953,60 @@ mod tests {
         assert_eq!(gain, Some("not tagged (plays at 0 dB)"));
     }
 
+    /// The pair iced delivers for one press: the key without modifiers, and
+    /// the key with them applied.
+    ///
+    /// Written out because the first attempt at fixing `?` tested a
+    /// `Key::Character("?")` that this application never receives, and so
+    /// proved nothing about the press that produces it.
+    fn press(key: &str, typed: &str, modifiers: Modifiers) -> Option<Action> {
+        publish_keymap(&Keymap::standard());
+        resolve_key(
+            &Key::Character(key.into()),
+            &Key::Character(typed.into()),
+            modifiers,
+        )
+    }
+
+    #[test]
+    fn shift_slash_opens_the_cheatsheet_rather_than_the_search() {
+        // The press as iced actually reports it: `key` is the key without
+        // modifiers, so `/`, and `modified_key` is what it typed, so `?`.
+        // Reading only the first meant `?` could not be bound at all -- and
+        // then discarding shift to compensate made Shift+/ open the search,
+        // because `/` is what it looked like.
+        assert_eq!(
+            press("/", "?", Modifiers::SHIFT),
+            Some(Action::ToggleHelp),
+            "shift-slash did not reach the cheatsheet"
+        );
+    }
+
+    #[test]
+    fn a_bare_slash_still_opens_the_search() {
+        // The binding `?` displaced. Unshifted, both keys are `/`.
+        assert_eq!(
+            press("/", "/", Modifiers::empty()),
+            Some(Action::FocusSearch)
+        );
+    }
+
+    #[test]
+    fn a_control_chord_survives_the_modified_key() {
+        // Ctrl chords are on the key, not on what it would have typed, and a
+        // platform is free to report something odd as the modified key. The
+        // fallback to the unmodified key is what keeps them working.
+        assert_eq!(
+            press("s", "s", Modifiers::CTRL),
+            Some(Action::ToggleShuffle)
+        );
+        assert_eq!(
+            press("s", "\u{13}", Modifiers::CTRL),
+            Some(Action::ToggleShuffle),
+            "a control character as the modified key lost the chord"
+        );
+    }
+
     #[test]
     fn key_presses_resolve_against_the_keymap_the_application_published() {
         // The seam §10 is built around, and the one that was not connected:
@@ -1957,13 +2032,18 @@ mod tests {
         publish_keymap(&vim);
 
         assert_eq!(
-            resolve_key(&Key::Character("j".into()), Modifiers::empty()),
+            resolve_key(
+                &Key::Character("j".into()),
+                &Key::Character("j".into()),
+                Modifiers::empty()
+            ),
             Some(Action::MoveDown),
             "the published keymap did not reach the resolver"
         );
         // And the standard map's bindings are gone, rather than both applying.
         assert_eq!(
             resolve_key(
+                &Key::Named(iced::keyboard::key::Named::Space),
                 &Key::Named(iced::keyboard::key::Named::Space),
                 Modifiers::empty()
             ),
@@ -1975,12 +2055,17 @@ mod tests {
         assert_eq!(
             resolve_key(
                 &Key::Named(iced::keyboard::key::Named::Space),
+                &Key::Named(iced::keyboard::key::Named::Space),
                 Modifiers::empty()
             ),
             Some(Action::PlayPause)
         );
         assert_eq!(
-            resolve_key(&Key::Character("j".into()), Modifiers::empty()),
+            resolve_key(
+                &Key::Character("j".into()),
+                &Key::Character("j".into()),
+                Modifiers::empty()
+            ),
             None
         );
     }
