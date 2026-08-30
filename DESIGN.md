@@ -517,6 +517,8 @@ Elapsed sits to the left of the bar and total to the right -- a clock either sid
 
 While it is being dragged, the bar and the elapsed time both show where the pointer is rather than where playback still is; position updates from the engine are ignored until release, or the handle would be pulled back out from under the pointer several times a second.
 
+**The bar's grab area is set independently of how thick it looks.** A slider answers a click anywhere in its layout box, and the rail and handle are drawn centred inside it -- so the two are separate decisions and only one of them is visible. They were set as though they were the same decision: a 6px box carrying a 10px handle, which made the target you could see larger than the one that responded, and catching the handle mid-drag a matter of aim. The box is at least as tall as the handle, and a test asks the theme rather than assuming it, so growing the handle without growing the box fails.
+
 Position is reported whenever it moves, not once per second. A seek bar moves continuously, and a report per second makes the handle lurch a second's width at a time -- very visible on a short track. The elapsed text still renders whole seconds, so it is unaffected. A track of unknown length gets an inert strip rather than a movable handle, because a control that moves without doing anything is worse than one that does not move.
 
 Shuffle and repeat sit past the seek bar rather than among the transport buttons: they change what happens next, which is a different kind of thing from moving through what is playing now.

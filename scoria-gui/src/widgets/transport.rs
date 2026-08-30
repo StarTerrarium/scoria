@@ -31,6 +31,18 @@ const VOLUME_STEP: f32 = 0.05;
 /// it wrong makes a trackpad faster or slower than a wheel, not broken.
 const PIXELS_PER_NOTCH: f32 = 50.0;
 
+/// How tall the seek bar is to the pointer.
+///
+/// Not how thick it looks. The theme draws a 3px rail and a 10px handle, and
+/// both are centred in whatever box they are given, so this decides only what
+/// answers a click.
+///
+/// It was 6px -- smaller than the handle drawn on it, so the target you could
+/// see was bigger than the one that responded, and catching it mid-drag took
+/// aim. iced hit-tests a slider against its layout rectangle, and its own
+/// default height is 16, which the volume bar beside this one has always used.
+const SEEK_HEIGHT: f32 = 16.0;
+
 /// The volume after a scroll over the bar.
 ///
 /// Up is louder, which is the only arrangement anyone expects.
@@ -172,12 +184,15 @@ pub fn view<'a, Message: Clone + 'a>(
             move |v| on_event(Event::Scrub(v)),
         )
         .step(0.1_f32)
-        .height(6.0)
+        .height(SEEK_HEIGHT)
         .on_release(on_event(Event::SeekTo(shown_position)))
         .width(Fill)
         .into()
     } else {
-        Space::new().height(Length::Fixed(6.0)).width(Fill).into()
+        Space::new()
+            .height(Length::Fixed(SEEK_HEIGHT))
+            .width(Fill)
+            .into()
     };
 
     let time = move |value: String| {
@@ -255,6 +270,30 @@ mod tests {
 
     fn lines(y: f32) -> ScrollDelta {
         ScrollDelta::Lines { x: 0.0, y }
+    }
+
+    #[test]
+    fn the_seek_bar_is_at_least_as_tall_as_the_handle_drawn_on_it() {
+        // It was not. iced hit-tests a slider against its layout rectangle, so
+        // the height is the whole of what answers a click -- and at 6px it was
+        // smaller than the 10px handle the theme draws on it. The target you
+        // could see was bigger than the one that responded.
+        //
+        // Asked of the theme rather than written down here, so that growing the
+        // handle without growing the box it lives in fails rather than quietly
+        // reintroducing this.
+        for theme in Theme::all() {
+            let style = theme.slider_style(iced::widget::slider::Status::Active);
+            let iced::widget::slider::HandleShape::Circle { radius } = style.handle.shape else {
+                continue;
+            };
+            assert!(
+                SEEK_HEIGHT >= radius * 2.0,
+                "{}: a {}px handle in a {SEEK_HEIGHT}px box",
+                theme.name,
+                radius * 2.0
+            );
+        }
     }
 
     #[test]
