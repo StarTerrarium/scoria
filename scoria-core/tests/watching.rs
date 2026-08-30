@@ -7,61 +7,40 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use lofty::config::WriteOptions;
-use lofty::prelude::{ItemKey, TagExt};
-use lofty::tag::{Tag, TagType};
 use scoria_core::config::Paths;
 use scoria_core::event::{Event, LibraryDelta};
 use scoria_core::session::Session;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const SILENCE: &[u8] = include_bytes!("fixtures/silence.flac");
+mod common;
+use common::Scratch;
 
-/// A scratch home: settings, database and library root all under one directory.
-struct Scratch {
-    dir: PathBuf,
+/// A scratch home: settings, database and library root all under one
+/// directory, so a session here touches nothing real.
+struct Home {
+    scratch: Scratch,
 }
 
-impl Scratch {
+impl Home {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "scoria-watch-{}-{name}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("music")).unwrap();
-        Self { dir }
+        Self {
+            scratch: Scratch::new(name),
+        }
     }
 
     fn root(&self) -> PathBuf {
-        self.dir.join("music")
+        self.scratch.root()
     }
 
     fn session(&self) -> Session {
-        let mut session = Session::open(Paths::rooted_at(&self.dir)).unwrap();
+        let mut session = Session::open(Paths::rooted_at(self.scratch.path())).unwrap();
         session.config_mut().root = Some(self.root());
         session
     }
 
     fn write_track(&self, relative: &str, title: &str) -> PathBuf {
-        let path = self.root().join(relative);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, SILENCE).unwrap();
-
-        let mut tag = Tag::new(TagType::VorbisComments);
-        tag.insert_text(ItemKey::TrackTitle, title.to_owned());
-        tag.insert_text(ItemKey::AlbumArtist, "Watched".to_owned());
-        tag.insert_text(ItemKey::AlbumTitle, "Album".to_owned());
-        tag.save_to_path(&path, WriteOptions::default()).unwrap();
-        path
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        self.scratch.write_titled(&self.root(), relative, title)
     }
 }
 
@@ -84,16 +63,16 @@ fn wait_for_change(session: &mut Session, what: &str) -> LibraryDelta {
 
 #[test]
 fn a_new_file_is_indexed_without_being_asked() {
-    let scratch = Scratch::new("added");
-    scratch.write_track("a/01.flac", "First");
+    let home = Home::new("added");
+    home.write_track("a/01.flac", "First");
 
-    let mut session = scratch.session();
+    let mut session = home.session();
     session.request_rescan().unwrap_err(); // Not watching yet.
     session.start_watching().unwrap();
     wait_for_change(&mut session, "the initial scan");
     assert_eq!(session.index().len(), 1);
 
-    scratch.write_track("a/02.flac", "Second");
+    home.write_track("a/02.flac", "Second");
     wait_for_change(&mut session, "the new file");
 
     assert_eq!(
@@ -108,11 +87,11 @@ fn a_new_file_is_indexed_without_being_asked() {
 fn a_deleted_file_is_marked_missing_rather_than_dropped() {
     // §7.4, end to end and unattended: a vanished file is struck through, not
     // removed, so playback can say what will happen to it.
-    let scratch = Scratch::new("deleted");
-    let path = scratch.write_track("a/01.flac", "First");
-    scratch.write_track("a/02.flac", "Second");
+    let home = Home::new("deleted");
+    let path = home.write_track("a/01.flac", "First");
+    home.write_track("a/02.flac", "Second");
 
-    let mut session = scratch.session();
+    let mut session = home.session();
     session.start_watching().unwrap();
     wait_for_change(&mut session, "the initial scan");
     assert_eq!(session.index().len(), 2);
@@ -136,10 +115,10 @@ fn a_retagged_file_shows_its_new_title() {
     // first indexed, and the scanner reads every file's tags on every scan --
     // so the new title reaches storage. It has to reach the frontend too, and
     // the only thing that prompts a frontend to re-read is LibraryChanged.
-    let scratch = Scratch::new("retag");
-    scratch.write_track("a/01.flac", "Original");
+    let home = Home::new("retag");
+    home.write_track("a/01.flac", "Original");
 
-    let mut session = scratch.session();
+    let mut session = home.session();
     session.start_watching().unwrap();
     wait_for_change(&mut session, "the initial scan");
     assert!(
@@ -151,7 +130,7 @@ fn a_retagged_file_shows_its_new_title() {
         "the fixture did not index"
     );
 
-    scratch.write_track("a/01.flac", "Retitled");
+    home.write_track("a/01.flac", "Retitled");
     wait_for_change(&mut session, "the retag");
 
     assert!(
@@ -170,16 +149,16 @@ fn an_explicit_rescan_works_even_when_nothing_changed() {
     // §5.2: watching *and* an explicit rescan. Watching cannot see everything --
     // a network mount, a filesystem that reports no events -- so the manual
     // path is not a convenience.
-    let scratch = Scratch::new("explicit");
-    scratch.write_track("a/01.flac", "First");
+    let home = Home::new("explicit");
+    home.write_track("a/01.flac", "First");
 
-    let mut session = scratch.session();
+    let mut session = home.session();
     session.start_watching().unwrap();
     wait_for_change(&mut session, "the initial scan");
 
     // Written without touching the watched tree's mtimes in a way we rely on:
     // the point is that the request alone is enough.
-    scratch.write_track("a/02.flac", "Second");
+    home.write_track("a/02.flac", "Second");
     session.request_rescan().unwrap();
     wait_for_change(&mut session, "the requested scan");
 
@@ -188,10 +167,10 @@ fn an_explicit_rescan_works_even_when_nothing_changed() {
 
 #[test]
 fn watching_twice_is_harmless() {
-    let scratch = Scratch::new("twice");
-    scratch.write_track("a/01.flac", "First");
+    let home = Home::new("twice");
+    home.write_track("a/01.flac", "First");
 
-    let mut session = scratch.session();
+    let mut session = home.session();
     session.start_watching().unwrap();
     session.start_watching().unwrap();
     wait_for_change(&mut session, "the initial scan");
@@ -200,8 +179,8 @@ fn watching_twice_is_harmless() {
 
 #[test]
 fn watching_without_a_root_is_refused_rather_than_started() {
-    let scratch = Scratch::new("norot");
-    let mut session = Session::open(Paths::rooted_at(&scratch.dir)).unwrap();
+    let home = Home::new("norot");
+    let mut session = Session::open(Paths::rooted_at(home.scratch.path())).unwrap();
     assert!(matches!(
         session.start_watching(),
         Err(scoria_core::error::CoreError::NoLibraryRoot)
@@ -212,10 +191,10 @@ fn watching_without_a_root_is_refused_rather_than_started() {
 fn dropping_the_session_stops_the_scan_thread() {
     // The handle joins on drop, so this hanging is the failure mode -- a thread
     // left scanning a library nothing is looking at any more.
-    let scratch = Scratch::new("shutdown");
-    scratch.write_track("a/01.flac", "First");
+    let home = Home::new("shutdown");
+    home.write_track("a/01.flac", "First");
 
-    let mut session = scratch.session();
+    let mut session = home.session();
     session.start_watching().unwrap();
     wait_for_change(&mut session, "the initial scan");
 
@@ -233,14 +212,14 @@ fn the_index_is_stale_until_it_is_reloaded() {
     // The contract `start_watching` documents: the scan runs against its own
     // database handle, so the session's index is a copy that must be told to
     // re-read. A frontend that ignores this shows a library that never changes.
-    let scratch = Scratch::new("stale");
-    scratch.write_track("a/01.flac", "First");
+    let home = Home::new("stale");
+    home.write_track("a/01.flac", "First");
 
-    let mut session = scratch.session();
+    let mut session = home.session();
     session.start_watching().unwrap();
     wait_for_change(&mut session, "the initial scan");
 
-    scratch.write_track("a/02.flac", "Second");
+    home.write_track("a/02.flac", "Second");
 
     // Wait for the change without reloading.
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -267,12 +246,12 @@ fn the_index_is_stale_until_it_is_reloaded() {
 
 #[test]
 fn scan_progress_is_reported_while_it_runs() {
-    let scratch = Scratch::new("progress");
+    let home = Home::new("progress");
     for n in 1..=5 {
-        scratch.write_track(&format!("a/{n:02}.flac"), &format!("Track {n}"));
+        home.write_track(&format!("a/{n:02}.flac"), &format!("Track {n}"));
     }
 
-    let mut session = scratch.session();
+    let mut session = home.session();
     session.start_watching().unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -290,8 +269,8 @@ fn scan_progress_is_reported_while_it_runs() {
 /// The fixture has to be a real FLAC for any of this to mean anything.
 #[test]
 fn the_fixture_is_readable() {
-    let scratch = Scratch::new("fixture");
-    let path = scratch.write_track("a/01.flac", "First");
+    let home = Home::new("fixture");
+    let path = home.write_track("a/01.flac", "First");
     assert!(Path::new(&path).exists());
     assert!(scoria_core::library::tags::read(&path).is_ok());
 }
@@ -302,9 +281,9 @@ fn a_scan_that_finds_nothing_still_says_it_finished() {
     // it. There are no deltas, so `LibraryChanged` never arrives -- and without
     // a terminating event a frontend that started saying "scanning" would have
     // no way to learn that it had stopped, and would say it forever.
-    let scratch = Scratch::new("empty");
+    let home = Home::new("empty");
 
-    let mut session = scratch.session();
+    let mut session = home.session();
     session.start_watching().unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -328,10 +307,10 @@ fn a_scan_that_found_something_finishes_after_saying_so() {
     // Order matters: a frontend takes `ScanFinished` as the end of the
     // sequence, so a delta arriving after it would be applied to a library it
     // had already decided was settled.
-    let scratch = Scratch::new("ordering");
-    scratch.write_track("a/01.flac", "First");
+    let home = Home::new("ordering");
+    home.write_track("a/01.flac", "First");
 
-    let mut session = scratch.session();
+    let mut session = home.session();
     session.start_watching().unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -364,21 +343,21 @@ fn choosing_a_root_starts_the_watching_that_was_asked_for_too_early() {
     //
     // Without this, choosing a folder saved the setting and started nothing:
     // the window sat on "Reading your library. 0 files so far." forever.
-    let scratch = Scratch::new("firstrun");
-    scratch.write_track("a/01.flac", "First");
+    let home = Home::new("firstrun");
+    home.write_track("a/01.flac", "First");
 
-    let mut session = Session::open(Paths::rooted_at(&scratch.dir)).unwrap();
+    let mut session = Session::open(Paths::rooted_at(home.scratch.path())).unwrap();
     assert!(matches!(
         session.start_watching(),
         Err(scoria_core::error::CoreError::NoLibraryRoot)
     ));
 
-    session.set_root(scratch.root()).unwrap();
+    session.set_root(home.root()).unwrap();
     wait_for_change(&mut session, "the scan of the newly chosen library");
 
     assert_eq!(session.index().len(), 1);
     // And it keeps watching the new root, rather than scanning it once.
-    scratch.write_track("a/02.flac", "Second");
+    home.write_track("a/02.flac", "Second");
     wait_for_change(&mut session, "a file added after the root was chosen");
     assert_eq!(session.index().len(), 2);
 }
@@ -387,11 +366,11 @@ fn choosing_a_root_starts_the_watching_that_was_asked_for_too_early() {
 fn a_session_that_never_asked_to_watch_does_not_start_on_its_own() {
     // The command line sets a root and scans synchronously. Spawning a watch
     // thread it never asked for would scan the library twice.
-    let scratch = Scratch::new("unwatched");
-    scratch.write_track("a/01.flac", "First");
+    let home = Home::new("unwatched");
+    home.write_track("a/01.flac", "First");
 
-    let mut session = Session::open(Paths::rooted_at(&scratch.dir)).unwrap();
-    session.set_root(scratch.root()).unwrap();
+    let mut session = Session::open(Paths::rooted_at(home.scratch.path())).unwrap();
+    session.set_root(home.root()).unwrap();
 
     assert!(
         session.request_rescan().is_err(),

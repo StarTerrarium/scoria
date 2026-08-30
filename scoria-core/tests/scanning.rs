@@ -12,41 +12,24 @@
     clippy::panic
 )]
 
-use lofty::config::WriteOptions;
-use lofty::prelude::{ItemKey, TagExt};
-use lofty::tag::{Tag, TagType};
+use lofty::prelude::ItemKey;
 use scoria_core::db::{AlbumRepository, SqliteDatabase, TrackRepository};
 use scoria_core::library::artwork::{self, Artwork, ArtworkCache, ArtworkKey};
 use scoria_core::library::{ScanProgress, Scanner, tags};
 use scoria_core::query::sort::{SortChain, SortPreset};
 use std::path::{Path, PathBuf};
 
-const SILENCE: &[u8] = include_bytes!("fixtures/silence.flac");
+mod common;
+use common::{Scratch, db};
 
-/// A unique scratch directory per test.
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("scoria-scan-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-/// Writes a real FLAC with the given Vorbis comments.
-fn write_track(root: &Path, relative: &str, fields: &[(ItemKey, &str)]) -> PathBuf {
-    let path = root.join(relative);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, SILENCE).unwrap();
-
-    let mut tag = Tag::new(TagType::VorbisComments);
-    for (key, value) in fields {
-        tag.insert_text(*key, (*value).to_owned());
-    }
-    tag.save_to_path(&path, WriteOptions::default()).unwrap();
-    path
-}
-
-fn db() -> SqliteDatabase {
-    SqliteDatabase::open_in_memory().unwrap()
+/// A scratch library root, and the handle that removes it afterwards.
+///
+/// Returned as a pair because the tests below name the root repeatedly and
+/// the guard has to outlive them; dropping it removes the tree.
+fn scratch(name: &str) -> (Scratch, PathBuf) {
+    let scratch = Scratch::new(name);
+    let root = scratch.path().to_path_buf();
+    (scratch, root)
 }
 
 fn scan(root: &Path, db: &mut SqliteDatabase) -> scoria_core::ScanOutcome {
@@ -57,8 +40,8 @@ fn scan(root: &Path, db: &mut SqliteDatabase) -> scoria_core::ScanOutcome {
 
 #[test]
 fn a_scanned_file_can_be_read_back_with_its_tags() {
-    let root = scratch("roundtrip");
-    write_track(
+    let (_scratch, root) = scratch("roundtrip");
+    _scratch.write_track(
         &root,
         "花冷え。/乙女改革/01 SUNRISE.flac",
         &[
@@ -96,8 +79,8 @@ fn a_scanned_file_can_be_read_back_with_its_tags() {
 #[test]
 fn paths_are_stored_relative_to_the_root() {
     // §4.3, end to end: the scanner sees absolute paths and must store none.
-    let root = scratch("relative");
-    write_track(
+    let (_scratch, root) = scratch("relative");
+    _scratch.write_track(
         &root,
         "Ghost/Meliora/01.flac",
         &[(ItemKey::TrackTitle, "Spirit")],
@@ -113,9 +96,9 @@ fn paths_are_stored_relative_to_the_root() {
 
 #[test]
 fn scanning_is_idempotent() {
-    let root = scratch("idempotent");
-    write_track(&root, "a/b/01.flac", &[(ItemKey::TrackTitle, "One")]);
-    write_track(&root, "a/b/02.flac", &[(ItemKey::TrackTitle, "Two")]);
+    let (_scratch, root) = scratch("idempotent");
+    _scratch.write_track(&root, "a/b/01.flac", &[(ItemKey::TrackTitle, "One")]);
+    _scratch.write_track(&root, "a/b/02.flac", &[(ItemKey::TrackTitle, "Two")]);
 
     let mut db = db();
     let first = scan(&root, &mut db);
@@ -145,15 +128,15 @@ fn a_rescan_reports_the_file_that_was_retagged_and_only_that_one() {
     // them and almost none of them have changed. Reporting the one that did
     // is what carries an edit made in Picard through to the table -- and not
     // reporting the rest is what stops every scan looking like a full reload.
-    let root = scratch("retag-one");
-    write_track(&root, "a/01.flac", &[(ItemKey::TrackTitle, "One")]);
-    write_track(&root, "a/02.flac", &[(ItemKey::TrackTitle, "Two")]);
+    let (_scratch, root) = scratch("retag-one");
+    _scratch.write_track(&root, "a/01.flac", &[(ItemKey::TrackTitle, "One")]);
+    _scratch.write_track(&root, "a/02.flac", &[(ItemKey::TrackTitle, "Two")]);
 
     let mut db = db();
     let first = scan(&root, &mut db);
     assert_eq!(first.added.len(), 2);
 
-    write_track(
+    _scratch.write_track(
         &root,
         "a/01.flac",
         &[(ItemKey::TrackTitle, "One, actually")],
@@ -182,8 +165,8 @@ fn a_rescan_reports_the_file_that_was_retagged_and_only_that_one() {
 
 #[test]
 fn non_audio_files_are_ignored() {
-    let root = scratch("nonaudio");
-    write_track(&root, "a/b/01.flac", &[(ItemKey::TrackTitle, "One")]);
+    let (_scratch, root) = scratch("nonaudio");
+    _scratch.write_track(&root, "a/b/01.flac", &[(ItemKey::TrackTitle, "One")]);
     std::fs::write(root.join("a/b/cover.jpg"), b"not audio").unwrap();
     std::fs::write(root.join("a/b/notes.txt"), b"hello").unwrap();
 
@@ -195,8 +178,8 @@ fn non_audio_files_are_ignored() {
 #[test]
 fn an_unreadable_file_is_reported_without_failing_the_scan() {
     // One corrupt file must not cost the library.
-    let root = scratch("corrupt");
-    write_track(
+    let (_scratch, root) = scratch("corrupt");
+    _scratch.write_track(
         &root,
         "good/album/01.flac",
         &[(ItemKey::TrackTitle, "Fine")],
@@ -220,10 +203,10 @@ fn an_unreadable_file_is_reported_without_failing_the_scan() {
 
 #[test]
 fn tracks_sharing_a_musicbrainz_id_land_in_one_album() {
-    let root = scratch("mbid");
+    let (_scratch, root) = scratch("mbid");
     let mbid = "1adca70c-fdd0-4ee3-9020-3556c04fba58";
     for (n, title) in [("01", "One"), ("02", "Two")] {
-        write_track(
+        _scratch.write_track(
             &root,
             &format!("artist/album/{n}.flac"),
             &[
@@ -242,9 +225,9 @@ fn tracks_sharing_a_musicbrainz_id_land_in_one_album() {
 
 #[test]
 fn a_reissue_with_a_different_mbid_is_a_different_album() {
-    let root = scratch("reissue");
+    let (_scratch, root) = scratch("reissue");
     for (dir, mbid) in [("original", "aaaa"), ("reissue", "bbbb")] {
-        write_track(
+        _scratch.write_track(
             &root,
             &format!("artist/{dir}/01.flac"),
             &[
@@ -262,10 +245,10 @@ fn a_reissue_with_a_different_mbid_is_a_different_album() {
 
 #[test]
 fn untagged_files_fall_back_to_their_directory() {
-    let root = scratch("untagged");
-    write_track(&root, "rips/disc one/01.flac", &[]);
-    write_track(&root, "rips/disc one/02.flac", &[]);
-    write_track(&root, "rips/disc two/01.flac", &[]);
+    let (_scratch, root) = scratch("untagged");
+    _scratch.write_track(&root, "rips/disc one/01.flac", &[]);
+    _scratch.write_track(&root, "rips/disc one/02.flac", &[]);
+    _scratch.write_track(&root, "rips/disc two/01.flac", &[]);
 
     let mut db = db();
     let outcome = scan(&root, &mut db);
@@ -275,8 +258,8 @@ fn untagged_files_fall_back_to_their_directory() {
 
 #[test]
 fn a_file_with_no_title_is_labelled_by_its_filename_not_left_blank() {
-    let root = scratch("notitle");
-    write_track(&root, "rips/album/09 Mystery Track.flac", &[]);
+    let (_scratch, root) = scratch("notitle");
+    _scratch.write_track(&root, "rips/album/09 Mystery Track.flac", &[]);
 
     let mut db = db();
     scan(&root, &mut db);
@@ -287,8 +270,8 @@ fn a_file_with_no_title_is_labelled_by_its_filename_not_left_blank() {
 
 #[test]
 fn replay_gain_is_read_from_tags() {
-    let root = scratch("gain");
-    write_track(
+    let (_scratch, root) = scratch("gain");
+    _scratch.write_track(
         &root,
         "a/b/01.flac",
         &[
@@ -313,8 +296,8 @@ fn replay_gain_is_read_from_tags() {
 fn a_file_without_gain_tags_is_untagged_not_zero() {
     // §6.7 needs to tell "no data" apart from "measured at 0 dB": the first
     // plays at unity, the second is a real measurement.
-    let root = scratch("nogain");
-    write_track(&root, "a/b/01.flac", &[(ItemKey::TrackTitle, "One")]);
+    let (_scratch, root) = scratch("nogain");
+    _scratch.write_track(&root, "a/b/01.flac", &[(ItemKey::TrackTitle, "One")]);
 
     let mut db = db();
     scan(&root, &mut db);
@@ -325,9 +308,9 @@ fn a_file_without_gain_tags_is_untagged_not_zero() {
 
 #[test]
 fn a_vanished_file_is_marked_unavailable_not_deleted() {
-    let root = scratch("vanished");
-    let path = write_track(&root, "a/b/01.flac", &[(ItemKey::TrackTitle, "One")]);
-    write_track(&root, "a/b/02.flac", &[(ItemKey::TrackTitle, "Two")]);
+    let (_scratch, root) = scratch("vanished");
+    let path = _scratch.write_track(&root, "a/b/01.flac", &[(ItemKey::TrackTitle, "One")]);
+    _scratch.write_track(&root, "a/b/02.flac", &[(ItemKey::TrackTitle, "Two")]);
 
     let mut db = db();
     scan(&root, &mut db);
@@ -344,8 +327,8 @@ fn a_vanished_file_is_marked_unavailable_not_deleted() {
 
 #[test]
 fn a_restored_file_becomes_available_again() {
-    let root = scratch("restored");
-    let path = write_track(&root, "a/b/01.flac", &[(ItemKey::TrackTitle, "One")]);
+    let (_scratch, root) = scratch("restored");
+    let path = _scratch.write_track(&root, "a/b/01.flac", &[(ItemKey::TrackTitle, "One")]);
 
     let mut db = db();
     scan(&root, &mut db);
@@ -364,15 +347,16 @@ fn a_restored_file_becomes_available_again() {
 
 #[test]
 fn a_sidecar_cover_is_found_and_cached() {
-    let root = scratch("artwork-sidecar");
-    write_track(
+    let (_scratch, root) = scratch("artwork-sidecar");
+    _scratch.write_track(
         &root,
         "artist/album/01.flac",
         &[(ItemKey::AlbumTitle, "Album")],
     );
     std::fs::write(root.join("artist/album/cover.jpg"), b"pretend jpeg").unwrap();
 
-    let cache = ArtworkCache::new(scratch("artwork-cache").join("art"));
+    let (_cache_scratch, cache_dir) = scratch("artwork-cache");
+    let cache = ArtworkCache::new(cache_dir.join("art"));
     let mut db = db();
     Scanner::new(&root)
         .with_artwork(&cache)
@@ -388,8 +372,8 @@ fn a_sidecar_cover_is_found_and_cached() {
 
 #[test]
 fn sidecar_lookup_is_case_insensitive() {
-    let root = scratch("artwork-case");
-    write_track(&root, "artist/album/01.flac", &[]);
+    let (_scratch, root) = scratch("artwork-case");
+    _scratch.write_track(&root, "artist/album/01.flac", &[]);
     std::fs::write(root.join("artist/album/Folder.JPG"), b"art").unwrap();
 
     let found = artwork::sidecar(&root.join("artist/album"));
@@ -398,7 +382,7 @@ fn sidecar_lookup_is_case_insensitive() {
 
 #[test]
 fn cover_is_preferred_over_other_sidecar_names() {
-    let root = scratch("artwork-priority");
+    let (_scratch, root) = scratch("artwork-priority");
     std::fs::create_dir_all(root.join("album")).unwrap();
     std::fs::write(root.join("album/artwork.png"), b"wrong").unwrap();
     std::fs::write(root.join("album/cover.jpg"), b"right").unwrap();
@@ -411,10 +395,11 @@ fn cover_is_preferred_over_other_sidecar_names() {
 
 #[test]
 fn an_album_without_artwork_simply_has_none() {
-    let root = scratch("artwork-none");
-    write_track(&root, "artist/album/01.flac", &[]);
+    let (_scratch, root) = scratch("artwork-none");
+    _scratch.write_track(&root, "artist/album/01.flac", &[]);
 
-    let cache = ArtworkCache::new(scratch("artwork-none-cache").join("art"));
+    let (_cache_scratch, cache_dir) = scratch("artwork-none-cache");
+    let cache = ArtworkCache::new(cache_dir.join("art"));
     let mut db = db();
     Scanner::new(&root)
         .with_artwork(&cache)
@@ -427,7 +412,8 @@ fn an_album_without_artwork_simply_has_none() {
 
 #[test]
 fn replacing_artwork_does_not_leave_the_old_file_behind() {
-    let cache = ArtworkCache::new(scratch("artwork-replace").join("art"));
+    let (_cache_scratch, cache_dir) = scratch("artwork-replace");
+    let cache = ArtworkCache::new(cache_dir.join("art"));
     let key = ArtworkKey::from_stored("some-album-identity");
 
     cache
@@ -461,8 +447,8 @@ fn artwork_survives_the_database_being_rebuilt() {
     // The hazard this keying exists for. An album id is a rowid, and a rebuild
     // reassigns them -- art filed under one would resurface attached to
     // whichever album inherited the number. Identity does not move.
-    let root = scratch("artwork-rebuild");
-    write_track(
+    let (_scratch, root) = scratch("artwork-rebuild");
+    _scratch.write_track(
         &root,
         "artist/album/01.flac",
         &[
@@ -471,7 +457,8 @@ fn artwork_survives_the_database_being_rebuilt() {
         ],
     );
     std::fs::write(root.join("artist/album/cover.jpg"), b"the right cover").unwrap();
-    let cache = ArtworkCache::new(scratch("artwork-rebuild-cache").join("art"));
+    let (_cache_scratch, cache_dir) = scratch("artwork-rebuild-cache");
+    let cache = ArtworkCache::new(cache_dir.join("art"));
 
     let mut first = db();
     Scanner::new(&root)
@@ -499,14 +486,15 @@ fn artwork_survives_the_database_being_rebuilt() {
 fn artwork_for_an_album_that_is_gone_is_pruned() {
     // Derived data that only ever grows is a leak, and stale entries are also
     // what would let an old naming scheme linger.
-    let root = scratch("artwork-prune");
-    write_track(
+    let (_scratch, root) = scratch("artwork-prune");
+    _scratch.write_track(
         &root,
         "artist/album/01.flac",
         &[(ItemKey::AlbumTitle, "Album")],
     );
     std::fs::write(root.join("artist/album/cover.jpg"), b"art").unwrap();
-    let cache = ArtworkCache::new(scratch("artwork-prune-cache").join("art"));
+    let (_cache_scratch, cache_dir) = scratch("artwork-prune-cache");
+    let cache = ArtworkCache::new(cache_dir.join("art"));
 
     let mut db = db();
     Scanner::new(&root)
@@ -530,7 +518,7 @@ fn artwork_for_an_album_that_is_gone_is_pruned() {
 #[test]
 fn a_scanned_library_sorts_the_way_the_design_describes() {
     // The milestone's real question: does what came off disk order correctly?
-    let root = scratch("sortquery");
+    let (_scratch, root) = scratch("sortquery");
     for (path, artist, sort, album, date, n) in [
         (
             "o/1.flac",
@@ -545,7 +533,7 @@ fn a_scanned_library_sorts_the_way_the_design_describes() {
         ("g/2.flac", "Ghost", "Ghost", "Meliora", "2015", "1"),
         ("g/3.flac", "Ghost", "Ghost", "Opus Eponymous", "2010", "1"),
     ] {
-        write_track(
+        _scratch.write_track(
             &root,
             path,
             &[
@@ -591,8 +579,8 @@ fn a_scanned_library_sorts_the_way_the_design_describes() {
 
 #[test]
 fn a_scanned_library_is_searchable() {
-    let root = scratch("searchquery");
-    write_track(
+    let (_scratch, root) = scratch("searchquery");
+    _scratch.write_track(
         &root,
         "ec/tekkno/01.flac",
         &[
@@ -600,7 +588,7 @@ fn a_scanned_library_is_searchable() {
             (ItemKey::AlbumArtist, "Electric Callboy"),
         ],
     );
-    write_track(
+    _scratch.write_track(
         &root,
         "hb/otome/01.flac",
         &[
@@ -619,9 +607,9 @@ fn a_scanned_library_is_searchable() {
 
 #[test]
 fn progress_is_reported_and_ends_at_the_total() {
-    let root = scratch("progress");
+    let (_scratch, root) = scratch("progress");
     for n in 1..=5 {
-        write_track(&root, &format!("a/b/{n}.flac"), &[]);
+        _scratch.write_track(&root, &format!("a/b/{n}.flac"), &[]);
     }
 
     let mut db = db();
@@ -640,8 +628,8 @@ fn progress_is_reported_and_ends_at_the_total() {
 fn deltas_name_the_tracks_that_changed() {
     // The §14 question this milestone closes: the scanner knows exactly which
     // tracks changed, so it says so rather than invalidating everything.
-    let root = scratch("deltas");
-    write_track(&root, "a/b/01.flac", &[]);
+    let (_scratch, root) = scratch("deltas");
+    _scratch.write_track(&root, "a/b/01.flac", &[]);
 
     let mut db = db();
     let outcome = scan(&root, &mut db);
@@ -656,7 +644,7 @@ fn deltas_name_the_tracks_that_changed() {
 
 #[test]
 fn an_empty_root_scans_cleanly() {
-    let root = scratch("empty");
+    let (_scratch, root) = scratch("empty");
     let mut db = db();
     let outcome = scan(&root, &mut db);
     assert!(outcome.is_empty());
@@ -665,7 +653,8 @@ fn an_empty_root_scans_cleanly() {
 
 #[test]
 fn a_missing_root_does_not_fail_the_scan() {
-    let root = scratch("missing").join("does-not-exist");
+    let (_scratch, base) = scratch("missing");
+    let root = base.join("does-not-exist");
     let mut db = db();
     let outcome = scan(&root, &mut db);
     assert!(outcome.is_empty());
@@ -681,8 +670,8 @@ fn the_default_sort_chain_is_the_one_a_scan_feeds() {
 
 #[test]
 fn tag_reading_tolerates_a_track_number_with_a_total() {
-    let root = scratch("tracktotal");
-    write_track(&root, "a/b/01.flac", &[(ItemKey::TrackNumber, "4/12")]);
+    let (_scratch, root) = scratch("tracktotal");
+    _scratch.write_track(&root, "a/b/01.flac", &[(ItemKey::TrackNumber, "4/12")]);
 
     let tags = tags::read(&root.join("a/b/01.flac")).unwrap();
     assert_eq!(tags.track_number, Some(4));

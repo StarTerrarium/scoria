@@ -17,9 +17,8 @@ use scoria_core::query::sort::SortPreset;
 use std::path::Path;
 use std::time::Duration;
 
-fn db() -> SqliteDatabase {
-    SqliteDatabase::open_in_memory().unwrap()
-}
+mod common;
+use common::{Scratch, db};
 
 fn album(db: &mut SqliteDatabase, artist: &str, title: &str, date: &str) -> scoria_core::AlbumId {
     db.upsert_album(&NewAlbum {
@@ -93,7 +92,8 @@ fn a_database_written_by_an_older_version_keeps_its_tracks() {
     // The old shape is produced by dropping the v2 columns from a current
     // database and winding the version back, which is closer to a real upgrade
     // than a hand-copied v1 schema that would drift from the real one.
-    let dir = tempdir();
+    let scratch = Scratch::new("db");
+    let dir = scratch.path();
     let path = dir.join("library.db");
 
     {
@@ -177,7 +177,8 @@ fn counting_a_play_of_a_track_that_is_gone_is_an_error_not_a_silent_nothing() {
 
 #[test]
 fn migration_is_idempotent() {
-    let dir = tempdir();
+    let scratch = Scratch::new("db");
+    let dir = scratch.path();
     let path = dir.join("library.db");
 
     let first = SqliteDatabase::open(&path).unwrap();
@@ -190,7 +191,8 @@ fn migration_is_idempotent() {
 
 #[test]
 fn a_database_from_a_newer_build_is_refused_rather_than_mangled() {
-    let dir = tempdir();
+    let scratch = Scratch::new("db");
+    let dir = scratch.path();
     let path = dir.join("library.db");
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
@@ -384,7 +386,8 @@ fn no_absolute_path_can_reach_storage() {
 
 #[test]
 fn a_hand_edited_absolute_path_is_reported_not_panicked_on() {
-    let dir = tempdir();
+    let scratch = Scratch::new("db");
+    let dir = scratch.path();
     let path = dir.join("library.db");
     let db = SqliteDatabase::open(&path).unwrap();
     drop(db);
@@ -555,19 +558,10 @@ fn the_search_index_follows_deletion() {
 
 // ---------------------------------------------------------------- config --
 
-fn tempdir() -> std::path::PathBuf {
-    let base = std::env::temp_dir().join(format!(
-        "scoria-test-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    std::fs::create_dir_all(&base).unwrap();
-    base
-}
-
 #[test]
 fn a_missing_config_file_yields_defaults() {
-    let path = tempdir().join("definitely-absent.toml");
+    let scratch = Scratch::new("definitely-absent");
+    let path = scratch.join("definitely-absent.toml");
     let _ = std::fs::remove_file(&path);
 
     let config = scoria_core::config::load_library(&path).unwrap();
@@ -582,7 +576,8 @@ fn a_missing_config_file_yields_defaults() {
 
 #[test]
 fn config_survives_a_round_trip() {
-    let path = tempdir().join("round-trip.toml");
+    let scratch = Scratch::new("round-trip");
+    let path = scratch.join("round-trip.toml");
     // Built through the setter rather than as a literal: volume is private so
     // that nothing can store a value outside the range.
     let mut config = LibraryConfig::default();
@@ -598,7 +593,8 @@ fn config_survives_a_round_trip() {
 fn a_malformed_config_is_reported_rather_than_silently_reset() {
     // Quietly discarding settings because of a typo is worse than refusing to
     // start and saying which line is wrong.
-    let path = tempdir().join("malformed.toml");
+    let scratch = Scratch::new("malformed");
+    let path = scratch.join("malformed.toml");
     std::fs::write(&path, "root = [this is not toml").unwrap();
 
     let err = scoria_core::config::load_library(&path).unwrap_err();
@@ -613,7 +609,8 @@ fn an_unset_root_is_an_actionable_error() {
 
 #[test]
 fn saving_creates_the_config_directory() {
-    let path = tempdir().join("nested").join("deeper").join("config.toml");
+    let scratch = Scratch::new("nested-config");
+    let path = scratch.join("nested").join("deeper").join("config.toml");
     let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 
     scoria_core::config::save_library(&path, &LibraryConfig::default()).unwrap();
@@ -622,7 +619,8 @@ fn saving_creates_the_config_directory() {
 
 #[test]
 fn saving_leaves_no_temporary_file_behind() {
-    let path = tempdir().join("atomic.toml");
+    let scratch = Scratch::new("atomic");
+    let path = scratch.join("atomic.toml");
     scoria_core::config::save_library(&path, &LibraryConfig::default()).unwrap();
     assert!(!path.with_extension("toml.tmp").exists());
 }
@@ -669,7 +667,8 @@ fn writing_one_section_leaves_the_others_alone() {
     // The property that lets core and a frontend share a settings file. Neither
     // can name the other's types, so neither can serialise the whole document;
     // writing it wholesale from either side would delete the other's settings.
-    let path = tempdir().join("sections.toml");
+    let scratch = Scratch::new("sections");
+    let path = scratch.join("sections.toml");
     let _ = std::fs::remove_file(&path);
 
     let mut library = LibraryConfig::default();
@@ -705,7 +704,8 @@ fn saving_the_library_settings_leaves_the_frontend_s_alone() {
     // whenever the volume settles. Core used to serialise a bare
     // LibraryConfig over the whole document, so every volume change took the
     // theme, placement, columns, sort and drawer heights with it.
-    let path = tempdir().join("ui-then-library.toml");
+    let scratch = Scratch::new("ui-then-library");
+    let path = scratch.join("ui-then-library.toml");
     let _ = std::fs::remove_file(&path);
 
     #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -740,7 +740,8 @@ fn a_file_written_before_the_library_section_existed_is_moved_into_it() {
     // Core used to write its settings at the top level. Such a file has to
     // keep working, and the stray keys have to go -- a dead `root` sitting
     // above the live one is a trap for anyone editing this by hand (§7.3).
-    let path = tempdir().join("legacy-layout.toml");
+    let scratch = Scratch::new("legacy-layout");
+    let path = scratch.join("legacy-layout.toml");
     std::fs::write(
         &path,
         "root = \"/home/someone/Music\"\nplay-behaviour = \"whole-library\"\nvolume = 0.25\n\n[ui]\ntheme = \"Scoria Dark\"\n",
@@ -792,7 +793,8 @@ fn a_session_saving_its_settings_leaves_the_frontend_s_alone() {
     // The seam the bug actually lived at. The helper-level test above would
     // have passed throughout: Session was the thing calling the wrong
     // function, so that is where this has to be asserted.
-    let dir = tempdir().join("session-settings");
+    let scratch = Scratch::new("session-settings");
+    let dir = scratch.join("home");
     let _ = std::fs::remove_dir_all(&dir);
     let paths = Paths::rooted_at(&dir);
 
@@ -821,7 +823,8 @@ fn a_session_saving_its_settings_leaves_the_frontend_s_alone() {
 
 #[test]
 fn a_missing_section_yields_defaults() {
-    let path = tempdir().join("no-section.toml");
+    let scratch = Scratch::new("no-section");
+    let path = scratch.join("no-section.toml");
     let _ = std::fs::remove_file(&path);
     scoria_core::config::save_library(&path, &LibraryConfig::default()).unwrap();
 
@@ -838,7 +841,8 @@ fn a_missing_section_yields_defaults() {
 
 #[test]
 fn a_section_can_be_rewritten_without_growing_the_file() {
-    let path = tempdir().join("rewrite.toml");
+    let scratch = Scratch::new("rewrite");
+    let path = scratch.join("rewrite.toml");
     let _ = std::fs::remove_file(&path);
 
     #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
