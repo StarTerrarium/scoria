@@ -187,6 +187,11 @@ pub fn view<'a, Message: Clone + 'a>(
                         text(accelerator).size(11).style(move |_t: &Theme| muted),
                     ]
                     .spacing(10)
+                    // Fill the row's height and centre within it. A button
+                    // lays its content out at the padding offset -- top left
+                    // -- so a shrink-height row sits at the top of the band
+                    // that highlights, which the highlight makes obvious.
+                    .height(Fill)
                     .align_y(iced::Alignment::Center),
                 )
                 .padding([0, 8])
