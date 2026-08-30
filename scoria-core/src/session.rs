@@ -308,17 +308,18 @@ impl Session {
 
     fn publish_media_state(&mut self) {
         let Some(media) = &mut self.media else { return };
-        let track = self.playing.and_then(|id| self.index.track(id));
-        let artwork = track
-            .and_then(|track| self.index.album(track.album_id))
-            .and_then(|album| self.artwork.get(&ArtworkKey::from_stored(&album.identity)));
+        let index = &self.index;
+        let cache = &self.artwork;
+        let track = self.playing.and_then(|id| index.track(id));
 
-        media.publish(
-            self.playback_state,
-            track,
-            self.position,
-            artwork.as_deref(),
-        );
+        media.publish(self.playback_state, track, self.position, || {
+            // Only asked for on a track change. Finding artwork stats half a
+            // dozen candidate filenames, and this runs on every pass over the
+            // event stream.
+            track
+                .and_then(|track| index.album(track.album_id))
+                .and_then(|album| cache.get(&ArtworkKey::from_stored(&album.identity)))
+        });
     }
 
     /// Blocks for the next event, up to `timeout`.

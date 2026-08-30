@@ -346,9 +346,18 @@ impl Default for ColumnLayout {
 
 impl ColumnLayout {
     /// The columns actually drawn, in order.
+    ///
+    /// An iterator rather than a `Vec`: the table asks once per row it builds,
+    /// so a virtualised table over a six-figure library was allocating a
+    /// vector per row per frame for a list that never changes while it draws.
+    pub fn visible(&self) -> impl Iterator<Item = &ColumnSetting> + Clone {
+        self.columns.iter().filter(|c| c.visible)
+    }
+
+    /// How many columns are drawn.
     #[must_use]
-    pub fn visible(&self) -> Vec<ColumnSetting> {
-        self.columns.iter().copied().filter(|c| c.visible).collect()
+    pub fn visible_count(&self) -> usize {
+        self.visible().count()
     }
 
     /// Every column, including hidden ones, for the menu.
@@ -386,7 +395,7 @@ impl ColumnLayout {
     /// nothing and offers no way back, since the header it is configured from
     /// would be empty too.
     pub fn set_visible(&mut self, column: Column, visible: bool) {
-        if !visible && self.visible().len() <= 1 {
+        if !visible && self.visible_count() <= 1 {
             return;
         }
         if let Some(setting) = self.columns.iter_mut().find(|c| c.column == column) {
@@ -453,7 +462,7 @@ impl ColumnLayout {
     /// Total weight of the visible columns, for turning one into a fraction.
     #[must_use]
     pub fn total_weight(&self) -> u32 {
-        self.visible().iter().map(|c| u32::from(c.weight)).sum()
+        self.visible().map(|c| u32::from(c.weight)).sum()
     }
 
     /// Drags the right edge of the `index`th visible column to `fraction` of
@@ -464,7 +473,9 @@ impl ColumnLayout {
     /// does nothing, because there is nothing to take from -- the table has no
     /// slack of its own.
     pub fn drag_edge(&mut self, index: usize, fraction: f32) {
-        let visible = self.visible();
+        // Collected here, unlike on the drawing path: this runs once per
+        // pointer move and wants random access into the list.
+        let visible: Vec<ColumnSetting> = self.visible().copied().collect();
         let Some(dragged) = visible.get(index) else {
             return;
         };
@@ -507,7 +518,7 @@ impl ColumnLayout {
     /// obviously over.
     #[must_use]
     pub fn visible_at(&self, fraction: f32) -> usize {
-        let visible = self.visible();
+        let visible: Vec<ColumnSetting> = self.visible().copied().collect();
         let last = visible.len().saturating_sub(1);
         let total = self.total_weight();
         if total == 0 {
@@ -716,7 +727,7 @@ mod tests {
         let layout = ColumnLayout::default();
         assert_eq!(layout.all().len(), Column::ALL.len());
         assert!(
-            layout.visible().len() < Column::ALL.len(),
+            layout.visible_count() < Column::ALL.len(),
             "every column is on by default, so the optional ones are not optional"
         );
         for setting in layout.all() {
@@ -757,11 +768,11 @@ mod tests {
     #[test]
     fn a_drag_lands_the_column_where_it_was_dropped() {
         let mut layout = ColumnLayout::default();
-        let before: Vec<_> = layout.visible().iter().map(|c| c.column).collect();
+        let before: Vec<_> = layout.visible().map(|c| c.column).collect();
 
         // Carry the title (position 1) to where the album is (position 4).
         layout.move_visible(1, 4);
-        let after: Vec<_> = layout.visible().iter().map(|c| c.column).collect();
+        let after: Vec<_> = layout.visible().map(|c| c.column).collect();
 
         assert_eq!(after.get(4), Some(&Column::Title), "{after:?}");
         assert_eq!(after.len(), before.len(), "a column was lost or gained");
@@ -778,7 +789,7 @@ mod tests {
         // that survives a casual test.
         let mut layout = ColumnLayout::default();
         layout.move_visible(4, 1);
-        let after: Vec<_> = layout.visible().iter().map(|c| c.column).collect();
+        let after: Vec<_> = layout.visible().map(|c| c.column).collect();
         assert_eq!(after.get(1), Some(&Column::Album), "{after:?}");
     }
 
@@ -786,18 +797,18 @@ mod tests {
     fn dragging_a_column_onto_itself_changes_nothing() {
         // This is the click-to-sort case: pressed and released without moving.
         let mut layout = ColumnLayout::default();
-        let before = layout.visible();
+        let before: Vec<_> = layout.visible().copied().collect();
         layout.move_visible(2, 2);
-        assert_eq!(layout.visible(), before);
+        assert_eq!(layout.visible().copied().collect::<Vec<_>>(), before);
     }
 
     #[test]
     fn a_drag_past_the_ends_is_ignored_rather_than_wrapping() {
         let mut layout = ColumnLayout::default();
-        let before = layout.visible();
+        let before: Vec<_> = layout.visible().copied().collect();
         layout.move_visible(0, 99);
         layout.move_visible(99, 0);
-        assert_eq!(layout.visible(), before);
+        assert_eq!(layout.visible().copied().collect::<Vec<_>>(), before);
     }
 
     #[test]
@@ -815,7 +826,7 @@ mod tests {
         let hidden_after = layout.all().iter().position(|c| c.column == Column::Artist);
         assert!(hidden_before.is_some() && hidden_after.is_some());
         assert!(
-            !layout.visible().iter().any(|c| c.column == Column::Artist),
+            !layout.visible().any(|c| c.column == Column::Artist),
             "a hidden column became visible"
         );
     }
@@ -825,7 +836,7 @@ mod tests {
         // The header is laid out by weight, so a fraction of the width is a
         // position in the weights -- the same geometry `drag_edge` works in.
         let layout = ColumnLayout::default();
-        let visible = layout.visible();
+        let visible: Vec<_> = layout.visible().copied().collect();
         let total = f32::from(u16::try_from(layout.total_weight()).unwrap_or(u16::MAX));
 
         let mut edge = 0.0_f32;
@@ -845,7 +856,7 @@ mod tests {
     fn a_pointer_beyond_the_table_picks_an_end_rather_than_nothing() {
         // The catcher sheet follows the pointer off the table, so these arrive.
         let layout = ColumnLayout::default();
-        let last = layout.visible().len() - 1;
+        let last = layout.visible_count() - 1;
         assert_eq!(layout.visible_at(-5.0), 0);
         assert_eq!(layout.visible_at(0.0), 0);
         assert_eq!(layout.visible_at(1.0), last);
@@ -860,16 +871,16 @@ mod tests {
         for column in Column::ALL {
             layout.set_visible(column, false);
         }
-        assert_eq!(layout.visible().len(), 1, "something must remain");
+        assert_eq!(layout.visible_count(), 1, "something must remain");
     }
 
     #[test]
     fn a_hidden_column_can_be_brought_back() {
         let mut layout = ColumnLayout::default();
         layout.toggle(Column::Artist);
-        assert!(!layout.visible().iter().any(|c| c.column == Column::Artist));
+        assert!(!layout.visible().any(|c| c.column == Column::Artist));
         layout.toggle(Column::Artist);
-        assert!(layout.visible().iter().any(|c| c.column == Column::Artist));
+        assert!(layout.visible().any(|c| c.column == Column::Artist));
     }
 
     #[test]
@@ -893,7 +904,7 @@ mod tests {
         // one drag reflows everything is one nobody can arrange.
         let mut layout = ColumnLayout::default();
         let before = layout.total_weight();
-        let tail: Vec<u16> = layout.visible().iter().skip(2).map(|c| c.weight).collect();
+        let tail: Vec<u16> = layout.visible().skip(2).map(|c| c.weight).collect();
 
         layout.drag_edge(0, 0.25);
 
@@ -902,7 +913,7 @@ mod tests {
             before,
             "total width should not change"
         );
-        let after: Vec<u16> = layout.visible().iter().skip(2).map(|c| c.weight).collect();
+        let after: Vec<u16> = layout.visible().skip(2).map(|c| c.weight).collect();
         assert_eq!(after, tail, "columns beyond the drag moved");
     }
 
@@ -912,19 +923,19 @@ mod tests {
         // drag a one-way door.
         let mut layout = ColumnLayout::default();
         layout.drag_edge(0, 0.0);
-        assert!(layout.visible()[0].weight >= MIN_WEIGHT);
+        assert!(layout.visible().copied().collect::<Vec<_>>()[0].weight >= MIN_WEIGHT);
 
         layout.drag_edge(0, 1.0);
-        assert!(layout.visible()[1].weight >= MIN_WEIGHT);
+        assert!(layout.visible().copied().collect::<Vec<_>>()[1].weight >= MIN_WEIGHT);
     }
 
     #[test]
     fn dragging_the_last_edge_does_nothing() {
         // There is nothing to the right to take width from.
         let mut layout = ColumnLayout::default();
-        let before = layout.visible();
+        let before: Vec<_> = layout.visible().copied().collect();
         layout.drag_edge(before.len() - 1, 0.5);
-        assert_eq!(layout.visible(), before);
+        assert_eq!(layout.visible().copied().collect::<Vec<_>>(), before);
     }
 
     #[test]

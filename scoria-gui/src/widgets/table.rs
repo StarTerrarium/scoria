@@ -332,9 +332,10 @@ fn header<'a, Message: Clone + 'a>(
         .align_y(Alignment::Center)
         .height(Length::Fixed(ROW_HEIGHT));
     let visible = table.columns.visible();
+    let last = table.columns.visible_count().saturating_sub(1);
     let reordering = table.reordering;
 
-    for (index, setting) in visible.iter().enumerate() {
+    for (index, setting) in visible.enumerate() {
         // Drawn before the column it would push rightwards, and after the one
         // it would land beyond. This bar is the only thing saying the drag is
         // doing anything, so it goes in whether or not the pointer is over a
@@ -394,7 +395,7 @@ fn header<'a, Message: Clone + 'a>(
 
         // The divider after the last column would have nothing to take width
         // from, so it is not offered.
-        if index + 1 < visible.len() {
+        if index < last {
             let grip = theme.column_divider_style();
             headings = headings.push(
                 mouse_area(
@@ -476,10 +477,11 @@ fn track_row<'a, Message: Clone + 'a>(
     let text_colour = theme.text_style(theme.row_text(state));
 
     let visible = table.columns.visible();
+    let last = table.columns.visible_count().saturating_sub(1);
     let mut cells = row![]
         .align_y(Alignment::Center)
         .height(Length::Fixed(ROW_HEIGHT));
-    for (index, setting) in visible.iter().enumerate() {
+    for (index, setting) in visible.enumerate() {
         // §11: colour alone cannot carry the now-playing row. The tint is
         // deliberately quieter than selection, and a row that is both takes
         // the selection's background -- so the playing row also carries a
@@ -517,7 +519,7 @@ fn track_row<'a, Message: Clone + 'a>(
                 .padding(iced::Padding::from([0.0, 6.0]))
                 .clip(true),
         );
-        if index + 1 < visible.len() {
+        if index < last {
             cells = cells.push(Space::new().width(Length::Fixed(DIVIDER_WIDTH)));
         }
     }

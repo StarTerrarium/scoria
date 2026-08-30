@@ -129,6 +129,14 @@ pub struct App {
     modifiers: crate::keymap::Mods,
 
     playing: Option<TrackId>,
+    /// The playing track's artwork, and which track it was found for.
+    ///
+    /// Looking it up stats half a dozen candidate filenames, and `view` wants
+    /// it twice -- the transport thumbnail and, in `Top` placement, the
+    /// browser -- on every one of the forty frames a second the poll drives.
+    /// Artwork follows what is playing (§9.1), so the track id is the whole
+    /// key.
+    artwork: Option<(Option<TrackId>, Option<std::path::PathBuf>)>,
     state: PlaybackState,
     position: Duration,
     /// Set while the seek bar is being dragged. See `TransportView::scrubbing`.
@@ -231,6 +239,7 @@ impl App {
             anchor: None,
             modifiers: crate::keymap::Mods::NONE,
             playing: None,
+            artwork: None,
             state: PlaybackState::Stopped,
             position: Duration::ZERO,
             scrubbing: None,
@@ -361,6 +370,7 @@ impl App {
         match message {
             Message::Tick => {
                 self.drain_core_events();
+                self.refresh_artwork();
                 self.tick_overlay();
                 self.save_volume_if_settled();
             }
@@ -489,6 +499,10 @@ impl App {
         // Keep the cursor on the same track rather than the same row number:
         // a scan can insert tracks above it, and holding the index would move
         // the selection to whatever landed there.
+        // A scan caches artwork as it goes, so an album that had none may
+        // have some now.
+        self.artwork = None;
+
         let anchored = self.cursor.and_then(|index| self.rows.get(index).copied());
         self.refresh();
         if let Some(track) = anchored {
@@ -563,8 +577,14 @@ impl App {
                 // Let go where it started: that was a click, and a click on a
                 // heading sorts by it. Anything else is a move.
                 if reorder.to == reorder.from {
-                    if let Some(setting) = self.settings.columns.visible().get(reorder.from) {
-                        self.sort_by(setting.column);
+                    let clicked = self
+                        .settings
+                        .columns
+                        .visible()
+                        .nth(reorder.from)
+                        .map(|setting| setting.column);
+                    if let Some(column) = clicked {
+                        self.sort_by(column);
                     }
                 } else {
                     self.settings.columns.move_visible(reorder.from, reorder.to);
@@ -1423,7 +1443,7 @@ impl App {
         let now_playing = self.playing.and_then(|id| self.track(id));
         let transport_view = transport::TransportView {
             track: now_playing,
-            artwork: now_playing.and_then(|t| self.session.as_ref()?.artwork_for(t.album_id)),
+            artwork: self.playing_artwork(),
             queue_open: self.open_overlay_kind() == Some(Overlay::Queue),
             state: self.state,
             position: self.position,
@@ -1551,7 +1571,7 @@ impl App {
                     },
                     Message::AlbumPane,
                 ),
-                artwork: self.artwork_view(),
+                artwork: self.artwork_view(self.playing_artwork()),
             });
         // Handed to the layout rather than wrapped around the finished view, so
         // it covers the explorer and leaves the transport reachable.
@@ -1676,15 +1696,13 @@ impl App {
     }
 
     /// A caption naming the album some artwork belongs to.
+    ///
+    /// Through the album rather than by hunting for a track on it: the index
+    /// holds albums by id, and this ran while the overlay was open, which is
+    /// to say on every frame.
     fn album_caption(&self, album: scoria_core::AlbumId) -> Option<String> {
-        let track = self
-            .session
-            .as_ref()?
-            .index()
-            .tracks()
-            .iter()
-            .find(|t| t.album_id == album)?;
-        Some(format!("{} — {}", track.album_artist, track.album))
+        let album = self.session.as_ref()?.index().album(album)?;
+        Some(format!("{} — {}", album.album_artist, album.title))
     }
 
     /// §9.2: a one-line explanation, *only* when the view and the snapshot
@@ -1705,16 +1723,33 @@ impl App {
         ))
     }
 
-    /// The now-playing album's artwork, or a placeholder.
+    /// The playing album's artwork, found at most once per track.
     ///
     /// §9.1: artwork always follows what is playing. There is no mode and no
-    /// toggle, here or anywhere else it appears.
-    fn artwork_view(&self) -> Element<'_, Message, Theme> {
+    /// toggle, here or anywhere else it appears -- which is exactly why the
+    /// playing track is a sufficient key.
+    /// Brings the cached artwork into line with what is playing.
+    ///
+    /// Called from `update`, never from `view`: the lookup touches the
+    /// filesystem, and a view function runs on every frame.
+    fn refresh_artwork(&mut self) {
+        if self.artwork.as_ref().map(|(for_track, _)| *for_track) == Some(self.playing) {
+            return;
+        }
         let path = self
             .playing
             .and_then(|id| self.track(id))
             .and_then(|track| self.session.as_ref()?.artwork_for(track.album_id));
+        self.artwork = Some((self.playing, path));
+    }
 
+    /// The artwork found for what is playing, as last looked up.
+    fn playing_artwork(&self) -> Option<std::path::PathBuf> {
+        self.artwork.as_ref().and_then(|(_, path)| path.clone())
+    }
+
+    /// The now-playing album's artwork, or a placeholder.
+    fn artwork_view(&self, path: Option<std::path::PathBuf>) -> Element<'_, Message, Theme> {
         match path {
             Some(path) => iced::widget::image(path)
                 .width(Fill)

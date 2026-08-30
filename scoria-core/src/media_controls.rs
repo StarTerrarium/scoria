@@ -96,12 +96,17 @@ impl MediaBridge {
     /// Tells the desktop what is playing.
     ///
     /// Does nothing when nothing has changed, which is most calls.
+    /// `artwork` is a closure because finding it means asking the filesystem
+    /// whether each of half a dozen candidate files exists, and only a track
+    /// change needs the answer. This is called on every pass over the event
+    /// stream -- forty times a second -- and almost none of those are a track
+    /// change.
     pub fn publish(
         &mut self,
         state: PlaybackState,
         track: Option<&Track>,
         position: Duration,
-        artwork: Option<&std::path::Path>,
+        artwork: impl FnOnce() -> Option<std::path::PathBuf>,
     ) {
         let now = Published {
             track: track.map(|t| t.id),
@@ -117,7 +122,10 @@ impl MediaBridge {
         if track_changed {
             // A `file://` URL, which is what the MPRIS specification asks for
             // and what a desktop panel will actually load.
-            let cover = artwork.map(|path| format!("file://{}", path.display()));
+            let artwork = artwork();
+            let cover = artwork
+                .as_ref()
+                .map(|path| format!("file://{}", path.display()));
             let metadata = track.map_or_else(MediaMetadata::default, |track| MediaMetadata {
                 title: Some(&track.title),
                 album: Some(&track.album),

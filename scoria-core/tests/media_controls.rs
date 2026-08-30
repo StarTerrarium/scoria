@@ -38,8 +38,10 @@ fn letting_go_of_the_controls_does_not_hold_up_the_way_out() {
     // its D-Bus thread, and that thread finishes its queue first, so this is
     // the state that used to leave the window on screen for the best part of a
     // second.
-    bridge.publish(PlaybackState::Playing, None, Duration::from_secs(1), None);
-    bridge.publish(PlaybackState::Paused, None, Duration::from_secs(2), None);
+    bridge.publish(PlaybackState::Playing, None, Duration::from_secs(1), || {
+        None
+    });
+    bridge.publish(PlaybackState::Paused, None, Duration::from_secs(2), || None);
 
     let started = Instant::now();
     drop(bridge);
