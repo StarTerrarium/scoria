@@ -178,6 +178,14 @@ struct Engine {
     rng: Rng,
     /// Whether the next track has been handed to the backend already.
     preloaded: bool,
+    /// How long the current track is.
+    ///
+    /// Kept because the preload check wants it on every tick, and resolving
+    /// for it built a `TrackRef` -- an owned `PathBuf` among other things --
+    /// forty times a second on the audio thread, for the whole of every track
+    /// up to its last five seconds. Set when a track starts and cleared when
+    /// playback stops.
+    current_duration: Option<Duration>,
     last_reported_position: Duration,
 }
 
@@ -198,6 +206,7 @@ impl Engine {
             shuffled: false,
             rng: Rng::from_clock(),
             preloaded: false,
+            current_duration: None,
             last_reported_position: Duration::MAX,
         }
     }
@@ -385,6 +394,9 @@ impl Engine {
         self.source.advance();
 
         if self.source.current() == Some(playing) {
+            // Resolved once here, on a transition the backend made by itself,
+            // rather than on every tick of the track that follows.
+            self.current_duration = self.current_ref().map(|track| track.duration);
             self.last_reported_position = Duration::MAX;
             if let Some(position) = self.source.position() {
                 self.emit(Event::TrackChanged {
@@ -403,10 +415,10 @@ impl Engine {
         if self.preloaded {
             return;
         }
-        let Some(current) = self.current_ref() else {
+        let Some(duration) = self.current_duration else {
             return;
         };
-        if current.duration.saturating_sub(position) > PRELOAD_LEAD {
+        if duration.saturating_sub(position) > PRELOAD_LEAD {
             return;
         }
         // Repeat-one replays the same source rather than flowing into another,
@@ -477,6 +489,7 @@ impl Engine {
                     match self.backend.play(&track, gain) {
                         Ok(()) => {
                             self.preloaded = false;
+                            self.current_duration = Some(track.duration);
                             self.last_reported_position = Duration::MAX;
                             self.set_state(PlaybackState::Playing);
                             if let Some(position) = self.source.position() {
@@ -520,6 +533,11 @@ impl Engine {
     }
 
     fn set_state(&mut self, state: PlaybackState) {
+        if state == PlaybackState::Stopped {
+            // Every way of stopping runs through here, which is the one place
+            // that is true of.
+            self.current_duration = None;
+        }
         if self.state != state {
             self.state = state;
             self.emit(Event::PlaybackStateChanged(state));
