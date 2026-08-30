@@ -3,6 +3,9 @@ name = "scoria-gui"
 description = "iced frontend for Scoria."
 version.workspace = true
 edition.workspace = true
+# GitHub is the distribution channel, not crates.io (DESIGN.md 15). This makes a
+# stray `cargo publish` fail rather than push a music player's internals to a registry.
+publish = false
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -81,9 +81,10 @@ install: && desktop-install
 desktop-install:
     #!/usr/bin/env bash
     data="${XDG_DATA_HOME:-$HOME/.local/share}"
-    install -Dm644 packaging/scoria.desktop "$data/applications/scoria.desktop"
-    install -Dm644 packaging/scoria.svg "$data/icons/hicolor/scalable/apps/scoria.svg"
-    install -Dm644 packaging/scoria.png "$data/icons/hicolor/256x256/apps/scoria.png"
+    install -Dm644 packaging/io.github.starterrarium.Scoria.desktop "$data/applications/io.github.starterrarium.Scoria.desktop"
+    install -Dm644 packaging/io.github.starterrarium.Scoria.svg "$data/icons/hicolor/scalable/apps/io.github.starterrarium.Scoria.svg"
+    install -Dm644 packaging/io.github.starterrarium.Scoria.png "$data/icons/hicolor/256x256/apps/io.github.starterrarium.Scoria.png"
+    install -Dm644 packaging/io.github.starterrarium.Scoria.metainfo.xml "$data/metainfo/io.github.starterrarium.Scoria.metainfo.xml"
     command -v update-desktop-database >/dev/null && update-desktop-database -q "$data/applications" || true
     command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -qtf "$data/icons/hicolor" || true
     echo "installed to $data -- Scoria should appear in the application menu"
@@ -92,9 +93,10 @@ desktop-install:
 uninstall:
     #!/usr/bin/env bash
     data="${XDG_DATA_HOME:-$HOME/.local/share}"
-    rm -f "$data/applications/scoria.desktop" \
-          "$data/icons/hicolor/scalable/apps/scoria.svg" \
-          "$data/icons/hicolor/256x256/apps/scoria.png"
+    rm -f "$data/applications/io.github.starterrarium.Scoria.desktop" \
+          "$data/icons/hicolor/scalable/apps/io.github.starterrarium.Scoria.svg" \
+          "$data/icons/hicolor/256x256/apps/io.github.starterrarium.Scoria.png" \
+          "$data/metainfo/io.github.starterrarium.Scoria.metainfo.xml"
     # Reported rather than swallowed: an earlier version of this ran cargo
     # uninstall with `|| true` and claimed success while removing nothing.
     if cargo uninstall scoria-bin >/dev/null 2>&1; then

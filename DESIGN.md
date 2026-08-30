@@ -728,7 +728,7 @@ Themes are defined as serialisable data even while compiled in, so user themes l
 | Watching | notify | |
 | MPRIS | souvlaki 0.8 | Media keys, playerctl, desktop controls. Lives in the core: a headless session should still answer a media key, and the TUI should not have to reimplement it. souvlaki is not a UI crate, so invariant 1 is untouched |
 
-**The desktop pairs the window with the application entry by id.** `scoria.desktop` carries `StartupWMClass=scoria` and the window sets the same application id, which is what makes the desktop show Scoria's icon rather than its placeholder. The icon is also embedded in the binary, because the desktop entry is not installed during development and a window with no icon at all is worse. souvlaki 0.8 does not publish MPRIS's `DesktopEntry` property, so a desktop panel showing what is playing uses its own generic icon; that is upstream, and not worth a fork.
+**The desktop pairs the window with the application entry by id.** `io.github.starterrarium.Scoria.desktop` carries `StartupWMClass=io.github.starterrarium.Scoria` and the window sets the same application id, which is what makes the desktop show Scoria's icon rather than its placeholder. The icon is also embedded in the binary, because the desktop entry is not installed during development and a window with no icon at all is worse. souvlaki 0.8 does not publish MPRIS's `DesktopEntry` property, so a desktop panel showing what is playing uses its own generic icon; that is upstream, and not worth a fork.
 
 The entry deliberately declares no `MimeType`. Scoria takes commands, not file paths, so offering it in "Open with" would advertise something it cannot do.
 
@@ -802,7 +802,7 @@ Recorded because they were decided without explicit sign-off. Flag if any are wr
 
 ### Open
 
-The application id, deferred until there is a domain to base it on (§15). Everything else was taken during implementation and is recorded above.
+Nothing outstanding. Decisions taken during implementation are recorded above.
 
 ---
 
@@ -881,7 +881,21 @@ Every store format wants a reverse-DNS id, and it has to agree across
 build or fails a test -- the window just shows the compositor's placeholder icon.
 So `check-boundaries.sh` checks that they are one string.
 
-The id itself is still `scoria` and is deferred, because it should be a domain
-that will still be there later. The MPRIS bus name is deliberately *not* tied to
-it: `org.mpris.MediaPlayer2.scoria` is a D-Bus name, conventionally short, and
-renaming it would break anyone's `playerctl` scripts for no benefit.
+The id is **`io.github.starterrarium.Scoria`**, a code-hosting id rather than a
+domain one. Flathub accepts `io.github.` as a first-class prefix and validates it
+by reaching the repository, so there is no domain to buy, no renewal to keep
+alive, and no HTTPS endpoint to keep serving -- and the id cannot be quietly lost
+by letting a registration lapse, which is a real hazard for something this
+permanent. The account component is lowercase because Flathub requires it: *"the
+domain portion must be in lowercase"*, whatever the account's own spelling.
+
+The tradeoff taken knowingly: this ties the identity to GitHub. Moving forges
+later would mean a rename, which Flathub reviews strictly and which orphans every
+user's data under `~/.var/app/<id>`.
+
+Two things deliberately keep the short name. The binary is `scoria` -- the id
+names a desktop application, not a command, and `scoria play` should not grow
+four components. And the MPRIS bus name stays `org.mpris.MediaPlayer2.scoria`,
+because it is a D-Bus name, conventionally short, and renaming it would break
+anyone's `playerctl` scripts for no benefit. `check-boundaries.sh` deliberately
+does not tie either of them to the id.

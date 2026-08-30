@@ -5,17 +5,19 @@ primary, AUR secondary, no AppImage. This file is the recipe for each.
 
 ## Blocked on
 
-Neither channel can be finished yet, and both are waiting on the same two things:
+The application id is settled -- **`io.github.starterrarium.Scoria`** (§15) -- and
+the source is at <https://github.com/StarTerrarium/scoria>, so the AUR package
+can be written now.
 
-1. **A public git repository.** A `PKGBUILD` needs a `source=` URL and a Flathub
-   manifest needs a public source. There is no git remote configured.
-2. **The reverse-DNS application id** (§15). It is still `scoria`.
-   `scripts/check-boundaries.sh` enforces that the id agrees across
-   `scoria-gui/src/lib.rs`, the desktop entry's basename, its `StartupWMClass`,
-   its `Icon=`, and the icon files -- so the rename either lands everywhere or
-   fails the build.
+**Flathub is waiting on screenshots**, and only those. It will not accept a
+submission without at least one, and the metainfo file
+(`packaging/io.github.starterrarium.Scoria.metainfo.xml`) carries a marked
+empty block for them. The three worth taking are named in the commented block in
+[`README.md`](../README.md).
 
-The AUR package needs only (1). Flathub needs both, plus screenshots.
+`scripts/check-boundaries.sh` enforces that the id agrees across
+`scoria-gui/src/lib.rs`, the desktop entry's basename, its `StartupWMClass`, its
+`Icon=`, the icon files and the metainfo -- so it cannot drift from here.
 
 ---
 
@@ -50,9 +52,10 @@ paths rather than `$XDG_DATA_HOME`:
 | From | To |
 |---|---|
 | `target/release/scoria` | `/usr/bin/scoria` |
-| `packaging/scoria.desktop` | `/usr/share/applications/` |
-| `packaging/scoria.svg` | `/usr/share/icons/hicolor/scalable/apps/` |
-| `packaging/scoria.png` | `/usr/share/icons/hicolor/256x256/apps/` |
+| `packaging/io.github.starterrarium.Scoria.desktop` | `/usr/share/applications/` |
+| `packaging/io.github.starterrarium.Scoria.svg` | `/usr/share/icons/hicolor/scalable/apps/` |
+| `packaging/io.github.starterrarium.Scoria.png` | `/usr/share/icons/hicolor/256x256/apps/` |
+| `packaging/io.github.starterrarium.Scoria.metainfo.xml` | `/usr/share/metainfo/` |
 | `LICENSE` | `/usr/share/licenses/scoria/` |
 
 Check the result before submitting: `namcap` the built package, and

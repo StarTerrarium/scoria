@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.starterrarium.Scoria</id>
+
+  <name>Scoria</name>
+  <summary>Browse a music library, not a playlist</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+
+  <developer id="io.github.starterrarium">
+    <name>Joel Smith</name>
+  </developer>
+
+  <description>
+    <p>
+      Most players are playlist-centric and treat the library as a source to
+      build playlists from. Scoria inverts that: the library is the primary
+      object, and you navigate it directly. It is aimed at someone with a
+      well-organised local library who listens to whole albums and wants to see
+      a lot of information at once.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Cascading filter panes and a dense, sortable, configurable track table, in three layouts that differ only in where the browser sits</li>
+      <li>Gapless playback: the next track is decoded before the current one drains</li>
+      <li>ReplayGain read from tags, album gain in album order and track gain when shuffled</li>
+      <li>Playback is a snapshot, so re-sorting, filtering or searching never disturbs what is playing</li>
+      <li>Watches the library, so files added or removed are picked up without asking</li>
+      <li>Media keys, playerctl, and the desktop's own panel, over MPRIS</li>
+      <li>Full-text search, a queue overlay, album artwork, and a keyboard path to everything</li>
+    </ul>
+    <p>
+      Scoria never talks to the internet — not for artwork, tags, lookups,
+      updates or telemetry. The library on disk is the only source of truth.
+      That is a decision about what the application is rather than a privacy
+      feature bolted to the side, and the build fails if an HTTP or TLS client
+      appears anywhere in its dependency graph.
+    </p>
+    <p>
+      The library is assumed to be tagged with MusicBrainz Picard. Supported
+      formats are FLAC, MP3, Ogg Vorbis, AAC and Apple Lossless in MP4, raw
+      AAC, WAV and AIFF.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.starterrarium.Scoria.desktop</launchable>
+
+  <!-- Required by Flathub, and the one thing still missing. See the commented
+       block in README.md for the three worth taking. Replace this whole element.
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/StarTerrarium/scoria/main/docs/screenshot-left.png</image>
+      <caption>Browsing a library with the browser on the left</caption>
+    </screenshot>
+  </screenshots>
+  -->
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Player</category>
+  </categories>
+
+  <keywords>
+    <keyword>music</keyword>
+    <keyword>audio</keyword>
+    <keyword>player</keyword>
+    <keyword>library</keyword>
+    <keyword>album</keyword>
+    <keyword>flac</keyword>
+  </keywords>
+
+  <url type="homepage">https://github.com/StarTerrarium/scoria</url>
+  <url type="bugtracker">https://github.com/StarTerrarium/scoria/issues</url>
+  <url type="vcs-browser">https://github.com/StarTerrarium/scoria</url>
+
+  <!-- Nothing to declare, and that is accurate rather than lazy: no network,
+       no chat, no user-generated content, no purchases. -->
+  <content_rating type="oars-1.1"/>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <releases>
+    <release version="1.0.0" date="2026-08-30">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -9,6 +9,7 @@ edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-only"
 authors = ["Joel Smith"]
+repository = "https://github.com/StarTerrarium/scoria"
 
 # Every third-party version lives here and nowhere else. CLAUDE.md: do not bump a
 # major or minor as part of an unrelated task.

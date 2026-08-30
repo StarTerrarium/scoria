@@ -296,6 +296,23 @@ else
   grep -q "packaging/$appid.png" scoria-gui/src/lib.rs || \
     mismatch="$mismatch\n  the window icon is not include_bytes!(\".../$appid.png\")"
 
+  # AppStream carries the id a fourth time. GNOME Software and KDE Discover
+  # both read it, and Flathub will not take a submission without it, so a
+  # metainfo file naming a different id is an application that installs and
+  # then cannot be found in a store.
+  metainfo="packaging/$appid.metainfo.xml"
+  if [ ! -f "$metainfo" ]; then
+    mismatch="$mismatch\n  no $metainfo"
+  else
+    mid=$(grep -oE '<id>[^<]+</id>' "$metainfo" | head -1 | sed 's|</\?id>||g')
+    launch=$(grep -oE '<launchable[^>]*>[^<]+</launchable>' "$metainfo" \
+      | head -1 | sed 's|.*>\(.*\)</launchable>|\1|')
+    [ "$mid" = "$appid" ] || \
+      mismatch="$mismatch\n  the metainfo <id> is $mid, but application_id is \"$appid\""
+    [ "$launch" = "$appid.desktop" ] || \
+      mismatch="$mismatch\n  the metainfo <launchable> is $launch, not $appid.desktop"
+  fi
+
   if [ -n "$mismatch" ]; then
     fail "the desktop identity disagrees with itself:"
     printf '%b\n' "$mismatch" | sed '/^[[:space:]]*$/d; s/^/     /'
