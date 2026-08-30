@@ -27,6 +27,10 @@ pub enum LibraryDelta {
     /// Something changed; re-run outstanding queries.
     Invalidated,
     TracksAdded(Vec<TrackId>),
+    /// Tracks already indexed whose stored row changed -- a retag, in
+    /// practice. The scanner reads every file's tags on every pass, so this
+    /// is the delta that carries an edit made in Picard through to the table.
+    TracksChanged(Vec<TrackId>),
     /// Nothing emits this yet, and a scan never will: §7.4 marks a file that
     /// has gone rather than deleting its row, which is what
     /// [`Self::AvailabilityChanged`] reports. Kept because the index applies

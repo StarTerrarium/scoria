@@ -37,6 +37,12 @@ pub struct ScanProgress {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ScanOutcome {
     pub added: Vec<TrackId>,
+    /// Tracks already indexed whose stored row genuinely differs from what is
+    /// on disk now -- a retag, in practice.
+    ///
+    /// Not "seen again": a scan reads every file's tags on every pass, so
+    /// almost every track is looked at and almost none of them change.
+    /// Storage decides, by leaving a row that already matches alone.
     pub updated: Vec<TrackId>,
     /// Tracks whose files no longer resolve. Marked, never deleted (§7.4).
     pub now_unavailable: Vec<TrackId>,
@@ -70,6 +76,13 @@ impl ScanOutcome {
         let mut deltas = Vec::new();
         if !self.added.is_empty() {
             deltas.push(LibraryDelta::TracksAdded(self.added.clone()));
+        }
+        // A retag reaches storage on the next scan whether or not anyone is
+        // told, and for a long time nobody was: `updated` produced no delta,
+        // so the new title sat in the database while the table went on showing
+        // the old one until something else prompted a re-query.
+        if !self.updated.is_empty() {
+            deltas.push(LibraryDelta::TracksChanged(self.updated.clone()));
         }
         let availability: Vec<TrackId> = self
             .now_unavailable
@@ -221,14 +234,25 @@ impl<'a> Scanner<'a> {
             outcome.now_unavailable = missing;
         }
 
-        // Files that were missing and are back. upsert_track already set them
-        // available; this is only to report it.
+        // Files that were missing and are back. The upsert already set them
+        // available -- and because the match test includes `available`, a file
+        // that returned with tags nobody touched is still written and still
+        // reported. This only turns that into a list.
+        //
+        // Through sets rather than Vec::contains: these are three lists that
+        // can each be the length of the library, and a linear scan inside a
+        // filter over another of them is quadratic on exactly the rescan that
+        // finds a reconnected drive.
+        let written: HashSet<TrackId> = outcome
+            .added
+            .iter()
+            .chain(&outcome.updated)
+            .copied()
+            .collect();
+        let gone: HashSet<TrackId> = outcome.now_unavailable.iter().copied().collect();
         outcome.now_available = previously_unavailable
             .into_iter()
-            .filter(|id| {
-                outcome.added.contains(id)
-                    || outcome.updated.contains(id) && !outcome.now_unavailable.contains(id)
-            })
+            .filter(|id| written.contains(id) && !gone.contains(id))
             .collect();
 
         outcome.albums_removed = repository.remove_empty_albums()?;
@@ -267,13 +291,22 @@ impl<'a> Scanner<'a> {
             return Ok(());
         }
         let tracks: Vec<NewTrack> = batch.iter().map(|(track, _)| track.clone()).collect();
-        let ids = repository.upsert_tracks(&tracks)?;
+        let written = repository.upsert_tracks(&tracks)?;
 
-        for (id, (_, is_new)) in ids.into_iter().zip(batch.iter()) {
-            if *is_new {
-                outcome.added.push(id);
+        // Only what actually changed comes back, so the results cannot be
+        // lined up against the batch by position -- an unchanged row produces
+        // nothing at all. Matched on path, which is what both sides are keyed
+        // on anyway.
+        let new_paths: HashSet<&RelativePath> = batch
+            .iter()
+            .filter(|(_, is_new)| *is_new)
+            .map(|(track, _)| &track.path)
+            .collect();
+        for row in written {
+            if new_paths.contains(&row.path) {
+                outcome.added.push(row.id);
             } else {
-                outcome.updated.push(id);
+                outcome.updated.push(row.id);
             }
         }
         batch.clear();

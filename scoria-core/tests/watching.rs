@@ -131,6 +131,41 @@ fn a_deleted_file_is_marked_missing_rather_than_dropped() {
 }
 
 #[test]
+fn a_retagged_file_shows_its_new_title() {
+    // Retagging in Picard is the ordinary way a library changes after it is
+    // first indexed, and the scanner reads every file's tags on every scan --
+    // so the new title reaches storage. It has to reach the frontend too, and
+    // the only thing that prompts a frontend to re-read is LibraryChanged.
+    let scratch = Scratch::new("retag");
+    scratch.write_track("a/01.flac", "Original");
+
+    let mut session = scratch.session();
+    session.start_watching().unwrap();
+    wait_for_change(&mut session, "the initial scan");
+    assert!(
+        session
+            .index()
+            .tracks()
+            .iter()
+            .any(|t| t.title == "Original"),
+        "the fixture did not index"
+    );
+
+    scratch.write_track("a/01.flac", "Retitled");
+    wait_for_change(&mut session, "the retag");
+
+    assert!(
+        session
+            .index()
+            .tracks()
+            .iter()
+            .any(|t| t.title == "Retitled"),
+        "a retagged file was written to storage but never announced, so \
+         nothing told the frontend to look again"
+    );
+}
+
+#[test]
 fn an_explicit_rescan_works_even_when_nothing_changed() {
     // §5.2: watching *and* an explicit rescan. Watching cannot see everything --
     // a network mount, a filesystem that reports no events -- so the manual

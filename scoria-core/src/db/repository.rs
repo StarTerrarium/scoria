@@ -38,6 +38,21 @@ pub struct NewTrack {
     pub audio: AudioProperties,
 }
 
+/// A track the storage layer actually wrote.
+///
+/// Returned only for rows that were inserted or that genuinely differ from
+/// what was already stored. A rescan sees every file again, and almost none of
+/// them have changed; saying so is what lets the scanner report a retag
+/// without also reporting the whole library every time the watcher wakes up.
+///
+/// Carries the path because unchanged rows produce nothing, so the results
+/// cannot be lined up against the input by position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Upserted {
+    pub id: TrackId,
+    pub path: RelativePath,
+}
+
 /// An album as the scanner produces it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewAlbum {
@@ -59,13 +74,18 @@ pub trait TrackRepository {
     /// [`CoreError::Database`] if the write fails.
     fn upsert_track(&mut self, track: &NewTrack) -> Result<TrackId, CoreError>;
 
-    /// Upserts many in one transaction. A scan of a six-figure library is one
-    /// transaction per batch, not per file.
+    /// Upserts many in one transaction, reporting only what actually changed.
+    ///
+    /// A scan of a six-figure library is one transaction per batch, not one
+    /// per file. It also sees every file again on every pass -- the scanner
+    /// has no mtime shortcut -- and almost none of them differ from what is
+    /// stored. A row that matches is left alone and is not returned, so the
+    /// caller can tell a retag from a file it has merely looked at again.
     ///
     /// # Errors
     /// [`CoreError::Database`] if the write fails. Either all of `tracks` are
     /// applied or none are.
-    fn upsert_tracks(&mut self, tracks: &[NewTrack]) -> Result<Vec<TrackId>, CoreError>;
+    fn upsert_tracks(&mut self, tracks: &[NewTrack]) -> Result<Vec<Upserted>, CoreError>;
 
     /// # Errors
     /// [`CoreError::Database`] on failure, [`CoreError::CorruptData`] if a

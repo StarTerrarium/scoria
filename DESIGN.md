@@ -724,7 +724,7 @@ Recorded because they were decided without explicit sign-off. Flag if any are wr
 - The schema is `STRICT`, has no library id anywhere (§5.1), and denormalises album artist and title onto `tracks` because sorting, grouping and the filter cascade all read them per row.
 - Shuffle uses a small owned PRNG rather than the `rand` crate, so that shuffle is deterministic under test.
 
-- `LibraryDelta` reports the specific tracks that changed. The scanner knows exactly which they are, so it says so and the UI can avoid a re-query it does not need; `Invalidated` stays available for callers that cannot be precise.
+- `LibraryDelta` reports the specific tracks that changed. The scanner knows exactly which they are, so it says so and the UI can avoid a re-query it does not need; `Invalidated` stays available for callers that cannot be precise. "Changed" is decided by storage, not by the scanner: the upsert leaves a row that already matches entirely alone, so a rescan reading every file's tags again reports only the ones that genuinely differ. Without that a retag reached the database and nothing else -- the table went on showing the old title, because the scan produced no delta to prompt a re-read.
 - Artwork is cached at original size, not rescaled (§5.3).
 - A file with no title tag is labelled with its filename rather than left blank. This is the only place the scanner fills in a value rather than leaving it absent, and it is a label rather than a claim about the tags.
 - Symlinked directories are not followed during a scan, so a library containing a link back to its own root terminates.

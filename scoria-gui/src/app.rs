@@ -1828,6 +1828,7 @@ fn describe(delta: &scoria_core::event::LibraryDelta, showing: usize) -> String 
     use scoria_core::event::LibraryDelta as D;
     match delta {
         D::TracksAdded(ids) => format!("{} track(s) added -- showing {showing}", ids.len()),
+        D::TracksChanged(ids) => format!("{} track(s) retagged", ids.len()),
         D::TracksRemoved(ids) => format!("{} track(s) removed -- showing {showing}", ids.len()),
         // §7.4: files that vanish are struck through, not dropped, so this is a
         // change in how rows look rather than in how many there are.

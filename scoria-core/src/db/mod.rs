@@ -7,5 +7,5 @@ pub mod repository;
 pub mod schema;
 pub mod sqlite;
 
-pub use repository::{AlbumRepository, NewAlbum, NewTrack, TrackRepository};
+pub use repository::{AlbumRepository, NewAlbum, NewTrack, TrackRepository, Upserted};
 pub use sqlite::SqliteDatabase;

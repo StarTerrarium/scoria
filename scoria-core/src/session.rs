@@ -15,7 +15,7 @@ use crate::config::{LibraryConfig, Paths, PlayBehaviour};
 use crate::db::repository::TrackRepository;
 use crate::db::sqlite::SqliteDatabase;
 use crate::error::CoreError;
-use crate::event::{Event, LibraryDelta, PlaybackState};
+use crate::event::{Event, PlaybackState};
 use crate::id::{AlbumId, QueryId, TrackId};
 use crate::library::artwork::ArtworkKey;
 use crate::library::scanner::{ScanOutcome, ScanProgress, Scanner};
@@ -696,11 +696,16 @@ impl Session {
             .scan(&mut self.db, &mut report)?;
 
         self.index = LibraryIndex::load(&self.db)?;
+        // Computed once. At six figures the added and changed lists are the
+        // length of the library, and this used to clone both of them twice.
+        //
+        // No Invalidated fallback: a scan that produced no deltas changed
+        // nothing, and saying otherwise would make a frontend reload the
+        // library for a temporary file that came and went. That was only here
+        // because a retag produced no delta either, which it now does -- so
+        // this path and the watch thread finally agree.
         for delta in outcome.deltas() {
             self.emit(Event::LibraryChanged(delta));
-        }
-        if outcome.deltas().is_empty() {
-            self.emit(Event::LibraryChanged(LibraryDelta::Invalidated));
         }
         self.emit(Event::ScanFinished);
 

@@ -4,7 +4,7 @@
 //! `scripts/check-boundaries.sh` enforces.
 
 use crate::date::Date;
-use crate::db::repository::{AlbumRepository, NewAlbum, NewTrack, TrackRepository};
+use crate::db::repository::{AlbumRepository, NewAlbum, NewTrack, TrackRepository, Upserted};
 use crate::db::schema;
 use crate::error::CoreError;
 use crate::id::{AlbumId, TrackId};
@@ -208,18 +208,23 @@ const ALBUM_COLUMNS: &str =
 
 impl TrackRepository for SqliteDatabase {
     fn upsert_track(&mut self, track: &NewTrack) -> Result<TrackId, CoreError> {
-        let ids = self.upsert_tracks(std::slice::from_ref(track))?;
-        ids.into_iter()
-            .next()
+        let written = self.upsert_tracks(std::slice::from_ref(track))?;
+        if let Some(first) = written.into_iter().next() {
+            return Ok(first.id);
+        }
+        // Nothing was written because the stored row already matched. The
+        // contract here is the id either way, so go and read it.
+        self.track_by_path(&track.path)?
+            .map(|stored| stored.id)
             .ok_or_else(|| CoreError::Database("upsert returned no id".to_owned()))
     }
 
-    fn upsert_tracks(&mut self, tracks: &[NewTrack]) -> Result<Vec<TrackId>, CoreError> {
+    fn upsert_tracks(&mut self, tracks: &[NewTrack]) -> Result<Vec<Upserted>, CoreError> {
         let transaction = self
             .conn
             .transaction()
             .map_err(db_err("cannot begin transaction"))?;
-        let mut ids = Vec::with_capacity(tracks.len());
+        let mut written = Vec::with_capacity(tracks.len());
         {
             let mut statement = transaction
                 .prepare(
@@ -256,6 +261,32 @@ impl TrackRepository for SqliteDatabase {
                          sample_rate_hz = excluded.sample_rate_hz,
                          bit_depth = excluded.bit_depth,
                          available = 1
+                     -- Leave a row that already matches entirely alone, so it
+                     -- returns nothing and the scanner can tell a retag from a
+                     -- file it has merely read again. `available` is in here
+                     -- deliberately: a file that comes back with tags nobody
+                     -- touched still has to stop being marked missing.
+                     --
+                     -- IS NOT rather than <>, because half these columns are
+                     -- nullable and <> against NULL is NULL, which would count
+                     -- every untagged field as unchanged.
+                     WHERE (
+                         album_id, title, artist, album_artist, album_artist_sort,
+                         album, date_year, date_month, date_day, disc,
+                         track_number, duration_ms, rg_track_gain, rg_track_peak,
+                         rg_album_gain, rg_album_peak, genre, composer,
+                         bitrate_kbps, sample_rate_hz, bit_depth, available
+                     ) IS NOT (
+                         excluded.album_id, excluded.title, excluded.artist,
+                         excluded.album_artist, excluded.album_artist_sort,
+                         excluded.album, excluded.date_year, excluded.date_month,
+                         excluded.date_day, excluded.disc, excluded.track_number,
+                         excluded.duration_ms, excluded.rg_track_gain,
+                         excluded.rg_track_peak, excluded.rg_album_gain,
+                         excluded.rg_album_peak, excluded.genre, excluded.composer,
+                         excluded.bitrate_kbps, excluded.sample_rate_hz,
+                         excluded.bit_depth, 1
+                     )
                      RETURNING id",
                 )
                 .map_err(db_err("cannot prepare track upsert"))?;
@@ -263,7 +294,7 @@ impl TrackRepository for SqliteDatabase {
             for track in tracks {
                 let (year, month, day) = date_columns(track.date);
                 let duration_ms = i64::try_from(track.duration.as_millis()).unwrap_or(i64::MAX);
-                let id: i64 = statement
+                let id: Option<i64> = statement
                     .query_row(
                         params![
                             track.album_id.get().cast_signed(),
@@ -292,14 +323,22 @@ impl TrackRepository for SqliteDatabase {
                         ],
                         |row| row.get(0),
                     )
+                    // No row means the stored one already matched, which is
+                    // the ordinary case for almost every file in a rescan.
+                    .optional()
                     .map_err(db_err("cannot upsert track"))?;
-                ids.push(TrackId(id.cast_unsigned()));
+                if let Some(id) = id {
+                    written.push(Upserted {
+                        id: TrackId(id.cast_unsigned()),
+                        path: track.path.clone(),
+                    });
+                }
             }
         }
         transaction
             .commit()
             .map_err(db_err("cannot commit tracks"))?;
-        Ok(ids)
+        Ok(written)
     }
 
     fn track(&self, id: TrackId) -> Result<Option<Track>, CoreError> {

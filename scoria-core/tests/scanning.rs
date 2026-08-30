@@ -123,12 +123,61 @@ fn scanning_is_idempotent() {
 
     let second = scan(&root, &mut db);
     assert!(second.added.is_empty(), "a rescan should add nothing");
-    assert_eq!(second.updated.len(), 2);
+    assert!(
+        second.updated.is_empty(),
+        "a rescan of files nobody touched should report no changes, got {:?}",
+        second.updated
+    );
+    assert!(
+        second.deltas().is_empty(),
+        "a rescan that changed nothing should tell a frontend nothing"
+    );
     assert_eq!(
         db.track_count().unwrap(),
         2,
         "rescanning must not duplicate"
     );
+}
+
+#[test]
+fn a_rescan_reports_the_file_that_was_retagged_and_only_that_one() {
+    // The scanner reads every file's tags on every pass, so it sees all of
+    // them and almost none of them have changed. Reporting the one that did
+    // is what carries an edit made in Picard through to the table -- and not
+    // reporting the rest is what stops every scan looking like a full reload.
+    let root = scratch("retag-one");
+    write_track(&root, "a/01.flac", &[(ItemKey::TrackTitle, "One")]);
+    write_track(&root, "a/02.flac", &[(ItemKey::TrackTitle, "Two")]);
+
+    let mut db = db();
+    let first = scan(&root, &mut db);
+    assert_eq!(first.added.len(), 2);
+
+    write_track(
+        &root,
+        "a/01.flac",
+        &[(ItemKey::TrackTitle, "One, actually")],
+    );
+    let second = scan(&root, &mut db);
+
+    assert!(second.added.is_empty());
+    assert_eq!(
+        second.updated.len(),
+        1,
+        "expected only the retagged file, got {:?}",
+        second.updated
+    );
+    assert_eq!(
+        second.deltas(),
+        vec![scoria_core::event::LibraryDelta::TracksChanged(
+            second.updated.clone()
+        )],
+        "the retag has to reach a frontend, or the table keeps the old title"
+    );
+
+    let stored = db.all_tracks().unwrap();
+    assert!(stored.iter().any(|t| t.title == "One, actually"));
+    assert!(stored.iter().any(|t| t.title == "Two"));
 }
 
 #[test]

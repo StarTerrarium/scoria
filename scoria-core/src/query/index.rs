@@ -149,7 +149,9 @@ impl LibraryIndex {
                 self.tracks.retain(|t| !removed.contains(&t.id));
                 self.reindex();
             }
-            LibraryDelta::TracksAdded(ids) | LibraryDelta::AvailabilityChanged(ids) => {
+            LibraryDelta::TracksAdded(ids)
+            | LibraryDelta::TracksChanged(ids)
+            | LibraryDelta::AvailabilityChanged(ids) => {
                 for id in ids {
                     match repository.track(*id)? {
                         Some(track) => self.upsert(track),
