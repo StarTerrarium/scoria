@@ -622,6 +622,57 @@ impl Theme {
         }
     }
 
+    /// The box around a segmented control.
+    ///
+    /// The browser placement is one setting with three values, and three
+    /// separate buttons beside a label read as four separate items -- with the
+    /// accent meaning "the current one" two pixels from where it meant "this
+    /// panel is open". A box around them says they are one control.
+    #[must_use]
+    pub fn segment_group(&self) -> container::Style {
+        container::Style {
+            background: None,
+            border: Border {
+                color: colour(self.roles.border),
+                width: 1.0,
+                radius: border::radius(3),
+            },
+            ..container::Style::default()
+        }
+    }
+
+    /// One cell of a segmented control.
+    ///
+    /// No border of its own -- the group draws the only one -- and square, so
+    /// the cells meet. The group clips, which is what keeps a filled end cell
+    /// inside the rounded corner.
+    #[must_use]
+    pub fn segment_button(&self, status: button::Status, current: bool) -> button::Style {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: if current {
+                Some(Background::Color(colour(self.roles.selected_row)))
+            } else if hovered {
+                Some(Background::Color(colour(self.roles.row_alternate)))
+            } else {
+                None
+            },
+            text_color: colour(if current {
+                self.roles.selected_row_text
+            } else if hovered {
+                self.roles.text
+            } else {
+                self.roles.text_muted
+            }),
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: border::radius(0),
+            },
+            ..button::Style::default()
+        }
+    }
+
     /// One row of a right-click menu.
     ///
     /// A menu row has to light up under the pointer -- it is a list of things

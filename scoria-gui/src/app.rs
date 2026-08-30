@@ -69,7 +69,13 @@ pub enum Message {
     CloseOverlay,
     SearchChanged(String),
     /// Something chosen from a track's right-click menu.
-    Menu(menu::Event),
+    TrackMenu(menu::TrackAction),
+    /// Something chosen from the header's overflow menu.
+    HeaderMenu(menu::HeaderAction),
+    /// Open the header's overflow menu.
+    OpenHeaderMenu,
+    /// Dismiss whichever menu is open.
+    CloseMenu,
     /// A key press, already resolved through the keymap.
     Action(Action),
     /// Which modifiers are held. Pointer events do not carry them, so a click
@@ -175,13 +181,13 @@ pub struct App {
     ///
     /// A set of one, because the table it is drawn with takes a selection.
     queue_selection: std::collections::BTreeSet<usize>,
-    /// The right-click menu, if one is open: which track, and where.
+    /// The open menu, if there is one.
     ///
     /// Not an `Overlay`. §9's overlays are a family of drawers with one set of
     /// rules -- they rise from the bottom, animate, resize by dragging and
     /// never cover the transport -- and a menu at the pointer shares none of
     /// it. Folding it in would mean those rules stopped describing the family.
-    menu: Option<TrackMenu>,
+    menu: Option<OpenMenu>,
     /// The file's own tags, read when the properties overlay opens.
     properties: Vec<(String, String)>,
     properties_problem: Option<String>,
@@ -411,7 +417,12 @@ impl App {
             Message::CloseOverlay => self.set_overlay(None),
             Message::ArtistPane(event) => self.on_artist_pane(event),
             Message::AlbumPane(event) => self.on_album_pane(event),
-            Message::Menu(event) => return self.on_menu(event),
+            Message::TrackMenu(action) => return self.on_track_menu(action),
+            Message::HeaderMenu(action) => return self.on_header_menu(action),
+            Message::OpenHeaderMenu => {
+                self.menu = Some(OpenMenu::Header { at: pointer() });
+            }
+            Message::CloseMenu => self.menu = None,
             Message::Action(action) => return self.on_action(action),
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
         }
@@ -536,7 +547,7 @@ impl App {
                 // one item in here rather than the whole gesture, which is
                 // what gives §9.3's metadata a mouse at all.
                 if let Some(track) = self.rows.get(index).copied() {
-                    self.menu = Some(TrackMenu {
+                    self.menu = Some(OpenMenu::Track {
                         track,
                         at: pointer(),
                     });
@@ -548,7 +559,11 @@ impl App {
                 // it already had does not: a relayout can report that, and the
                 // menu vanishing because the table was rebuilt underneath it
                 // is precisely how this used to fail.
-                if (offset - self.scroll_offset).abs() > f32::EPSILON {
+                if (offset - self.scroll_offset).abs() > f32::EPSILON
+                    && matches!(self.menu, Some(OpenMenu::Track { .. }))
+                {
+                    // Only the track menu is anchored to a row. The header's
+                    // is not attached to anything that scrolled.
                     self.menu = None;
                 }
                 self.scroll_offset = offset;
@@ -795,8 +810,8 @@ impl App {
     ///
     /// Every item is something the application could already do and a mouse
     /// could not reach. Nothing here is new behaviour; it is the door.
-    fn on_menu(&mut self, event: menu::Event) -> Task<Message> {
-        let Some(TrackMenu { track, .. }) = self.menu.take() else {
+    fn on_track_menu(&mut self, event: menu::TrackAction) -> Task<Message> {
+        let Some(OpenMenu::Track { track, .. }) = self.menu.take() else {
             return Task::none();
         };
         let Some(album) = self.track(track).map(|t| t.album_id) else {
@@ -806,17 +821,17 @@ impl App {
         match event {
             // §6.4: playing an album snapshots just that album. The core has
             // always handled this and nothing has ever asked for it.
-            menu::Event::PlayAlbum => {
+            menu::TrackAction::PlayAlbum => {
                 self.send(Command::PlayFrom {
                     source: scoria_core::SourceSpec::Album(album),
                     at: track,
                 });
             }
             // Invariant 6's one exception to artwork following playback.
-            menu::Event::ShowArtwork => self.set_overlay(Some(Overlay::Artwork(Some(album)))),
+            menu::TrackAction::ShowArtwork => self.set_overlay(Some(Overlay::Artwork(Some(album)))),
             // §9.3, and the reason this menu exists.
-            menu::Event::Properties => return self.open_overlay(Overlay::Properties(track)),
-            menu::Event::FilterArtist => {
+            menu::TrackAction::Properties => return self.open_overlay(Overlay::Properties(track)),
+            menu::TrackAction::FilterArtist => {
                 if let Some(artist) = self.track(track).map(|t| t.album_artist.clone()) {
                     self.selection.album_artists = vec![artist];
                     // §7.2's cascade runs one way: choosing an artist resets
@@ -825,13 +840,25 @@ impl App {
                     self.reset_view();
                 }
             }
-            menu::Event::FilterAlbum => {
+            menu::TrackAction::FilterAlbum => {
                 self.selection.albums = vec![album];
                 self.reset_view();
             }
-            menu::Event::Dismiss => {}
         }
         Task::none()
+    }
+
+    /// The header's overflow menu.
+    ///
+    /// Each item opens the panel its old button did and sends the same message
+    /// doing it, so nothing below this changed -- only the way in.
+    fn on_header_menu(&mut self, action: menu::HeaderAction) -> Task<Message> {
+        self.menu = None;
+        match action {
+            menu::HeaderAction::Columns => self.open_overlay(Overlay::Columns),
+            menu::HeaderAction::Settings => self.open_overlay(Overlay::Settings),
+            menu::HeaderAction::Shortcuts => self.open_overlay(Overlay::Help),
+        }
     }
 
     /// The queue's own table events. §9.2: double-click sets `position`.
@@ -1484,57 +1511,56 @@ impl App {
         // and so the chip stays beside the text it qualifies.
         header = header.push(iced::widget::Space::new().width(Fill));
 
-        // Where the browser sits (§7.1). Three buttons rather than one that
-        // cycles: a mouse should point at the layout it wants rather than
-        // clicking twice to pass through the one it does not, and three
-        // buttons say what the alternatives are, which a cycling key never
-        // could. The keystroke stays a cycle, because that is what a keystroke
-        // is good at.
+        // Where the browser sits (§7.1). Three cells rather than one button
+        // that cycles: a mouse should point at the layout it wants rather than
+        // clicking twice to pass through the one it does not, and three cells
+        // say what the alternatives are, which a cycling key never could. The
+        // keystroke stays a cycle, because that is what a keystroke is good at.
+        //
+        // Segmented, because it is one setting with three values. As three
+        // separate buttons beside a label it read as four separate items --
+        // and its accent meant "the current placement" two pixels from where
+        // the same accent meant "this panel is open".
         header = header.push(text("Browser").size(11).style(move |_t: &Theme| muted));
+        let mut segments = row![].align_y(iced::Alignment::Center);
         for placement in [
             BrowserPlacement::Off,
             BrowserPlacement::Top,
             BrowserPlacement::Left,
         ] {
             let current = placement == self.placement;
-            header = header.push(
+            segments = segments.push(
                 button(text(placement.short_label()).size(12))
-                    .padding([3, 8])
+                    .padding([3, 9])
                     .on_press(Message::SetPlacement(placement))
-                    .style(move |t: &Theme, status| t.transport_button(status, current)),
+                    .style(move |t: &Theme, status| t.segment_button(status, current)),
             );
         }
+        let group = self.theme.segment_group();
+        header = header.push(
+            container(segments)
+                // So a filled end cell stays inside the rounded corner.
+                .clip(true)
+                .style(move |_t: &Theme| group),
+        );
 
-        // Both of these have keybindings, and a keybinding is not a way in for
-        // anyone who has not been told about it. Words rather than glyphs:
-        // there is room here, and a word cannot fail to render the way a
-        // missing symbol can.
-        for (label, message, open) in [
-            (
-                "Columns",
-                Message::Action(Action::ToggleColumns),
-                self.open_overlay_kind() == Some(Overlay::Columns),
-            ),
-            (
-                "Settings",
-                Message::Action(Action::ToggleSettings),
-                self.open_overlay_kind() == Some(Overlay::Settings),
-            ),
-            // Appended rather than inserted: the other two have been in the
-            // same place for a while, and a new button should not move them.
-            (
-                "Shortcuts",
-                Message::Action(Action::ToggleHelp),
-                self.open_overlay_kind() == Some(Overlay::Help),
-            ),
-        ] {
-            header = header.push(
-                button(text(label).size(12))
-                    .padding([3, 10])
-                    .on_press(message)
-                    .style(move |t: &Theme, status| t.transport_button(status, open)),
-            );
-        }
+        // One way in for three panels that used to have a button each, in a row
+        // of seven look-alikes next to a setting that is not a panel at all.
+        //
+        // Each of them has a keystroke and none of them said so anywhere a
+        // mouse would find it; the menu says all three. A drawn glyph rather
+        // than a `⋯`, for the reason §8 gives: the transport's symbols were
+        // drawn so that no font could decide what they look like.
+        header = header.push(
+            button(crate::widgets::icon::view(
+                crate::widgets::icon::Icon::More,
+                self.menu
+                    .is_some_and(|open| matches!(open, OpenMenu::Header { .. })),
+            ))
+            .padding([3, 8])
+            .on_press(Message::OpenHeaderMenu)
+            .style(|t: &Theme, status| t.transport_button(status, false)),
+        );
 
         let search = container(header.spacing(6)).padding([6, 10]).width(Fill);
 
@@ -1607,10 +1633,25 @@ impl App {
         // everything, the transport included: unlike §9's drawers this is a
         // momentary thing at the pointer, and a menu the window can clip is a
         // menu with items nobody can choose.
-        let open = self.menu.as_ref().and_then(|open| {
-            self.track(open.track)
-                .map(|track| (menu::items(track, &self.keymap), open.at))
-        });
+        let menu_layer: Option<Element<'_, Message, Theme>> = match self.menu {
+            Some(OpenMenu::Track { track, at }) => self.track(track).map(|track| {
+                menu::view(
+                    menu::track_items(track, &self.keymap),
+                    at,
+                    &self.theme,
+                    Message::TrackMenu,
+                    Message::CloseMenu,
+                )
+            }),
+            Some(OpenMenu::Header { at }) => Some(menu::view(
+                menu::header_items(&self.keymap),
+                at,
+                &self.theme,
+                Message::HeaderMenu,
+                Message::CloseMenu,
+            )),
+            None => None,
+        };
 
         // **Always a stack, menu or no menu.**
         //
@@ -1627,10 +1668,8 @@ impl App {
         // that is not lets mouse events through to the rows underneath. Both
         // lengths for the reason that one is `Shrink` by default, which sets
         // the limits compressing and collapses every `Fill` inside.
-        let layer: Element<'_, Message, Theme> = match open {
-            Some((items, at)) => {
-                iced::widget::opaque(menu::view(items, at, &self.theme, Message::Menu))
-            }
+        let layer: Element<'_, Message, Theme> = match menu_layer {
+            Some(menu) => iced::widget::opaque(menu),
             None => Space::new().width(0).height(0).into(),
         };
 
@@ -1947,11 +1986,16 @@ fn resolve_key(
     })
 }
 
-/// An open right-click menu: the track it is for, and where it opened.
+/// The open menu, if there is one.
+///
+/// One field rather than one per menu, so §9's "one at a time" is true by
+/// construction and Escape has one thing to close before it reaches a drawer.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct TrackMenu {
-    track: TrackId,
-    at: iced::Point,
+enum OpenMenu {
+    /// A track's, opened by right-clicking its row (§9.6).
+    Track { track: TrackId, at: iced::Point },
+    /// The header's overflow.
+    Header { at: iced::Point },
 }
 
 const fn next_repeat(current: RepeatMode) -> RepeatMode {
@@ -2048,7 +2092,10 @@ mod tests {
         app.on_table(table::Event::Context(1));
 
         assert_eq!(
-            app.menu.map(|open| open.track),
+            app.menu.and_then(|open| match open {
+                OpenMenu::Track { track, .. } => Some(track),
+                OpenMenu::Header { .. } => None,
+            }),
             Some(TrackId(22)),
             "a right-click did not open the menu on the row it was on"
         );

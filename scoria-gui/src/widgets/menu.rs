@@ -30,10 +30,14 @@ use iced::widget::{
 use iced::{Element, Fill, Length, Point, Size};
 use scoria_core::model::Track;
 
-/// One row of the menu.
+/// One row of a menu.
+///
+/// Generic over the action, so a menu is a shape rather than a list: the track
+/// menu and the header's overflow carry different vocabularies through the
+/// same widget.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Item {
-    pub event: Event,
+pub struct Item<E> {
+    pub event: E,
     pub label: String,
     /// The keystroke that does the same thing, where there is one.
     ///
@@ -45,9 +49,9 @@ pub struct Item {
     pub separated: bool,
 }
 
-/// What the menu can ask for. The application decides what each means.
+/// What a track's menu can ask for. The application decides what each means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Event {
+pub enum TrackAction {
     /// Snapshot just this album (§6.4).
     PlayAlbum,
     /// §9.1, and invariant 6's one exception to artwork following playback.
@@ -56,7 +60,22 @@ pub enum Event {
     Properties,
     FilterArtist,
     FilterAlbum,
-    Dismiss,
+}
+
+/// What the header's overflow menu can ask for.
+///
+/// Three panels that each had a button of their own in a row of seven
+/// look-alike controls, next to a setting that is not a panel at all. They
+/// share one affordance now, and the menu is where their keystrokes finally
+/// get said out loud.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderAction {
+    /// Column visibility, order and the sort presets (§7.3).
+    Columns,
+    /// The settings with nowhere else to live (§9.4).
+    Settings,
+    /// The `?` cheatsheet (§8), generated from the keymap.
+    Shortcuts,
 }
 
 /// How wide the panel is.
@@ -70,9 +89,9 @@ const ROW_HEIGHT: f32 = 26.0;
 const SEPARATOR: f32 = 7.0;
 const PADDING: f32 = 5.0;
 
-/// What the menu offers for `track`.
+/// What a track's menu offers.
 #[must_use]
-pub fn items(track: &Track, keymap: &Keymap) -> Vec<Item> {
+pub fn track_items(track: &Track, keymap: &Keymap) -> Vec<Item<TrackAction>> {
     let accelerator = |action: Action| {
         keymap
             .bindings_for(action)
@@ -82,25 +101,25 @@ pub fn items(track: &Track, keymap: &Keymap) -> Vec<Item> {
 
     vec![
         Item {
-            event: Event::PlayAlbum,
+            event: TrackAction::PlayAlbum,
             label: "Play album".to_owned(),
             accelerator: None,
             separated: false,
         },
         Item {
-            event: Event::ShowArtwork,
+            event: TrackAction::ShowArtwork,
             label: "Show album art".to_owned(),
             accelerator: None,
             separated: true,
         },
         Item {
-            event: Event::Properties,
+            event: TrackAction::Properties,
             label: "Track metadata".to_owned(),
             accelerator: accelerator(Action::ShowProperties),
             separated: false,
         },
         Item {
-            event: Event::FilterArtist,
+            event: TrackAction::FilterArtist,
             // The structural value (§4.1), because that is what the filter
             // keys on -- so the menu names what it will actually do.
             label: format!("Filter to {}", track.album_artist),
@@ -108,7 +127,7 @@ pub fn items(track: &Track, keymap: &Keymap) -> Vec<Item> {
             separated: true,
         },
         Item {
-            event: Event::FilterAlbum,
+            event: TrackAction::FilterAlbum,
             label: format!("Filter to {}", track.album),
             accelerator: None,
             separated: false,
@@ -116,9 +135,45 @@ pub fn items(track: &Track, keymap: &Keymap) -> Vec<Item> {
     ]
 }
 
+/// What the header's overflow menu offers.
+///
+/// The keystroke beside each is read from the keymap, as §8's cheatsheet is:
+/// these three all had one and none of them said so anywhere a mouse would
+/// find it.
+#[must_use]
+pub fn header_items(keymap: &Keymap) -> Vec<Item<HeaderAction>> {
+    let accelerator = |action: Action| {
+        keymap
+            .bindings_for(action)
+            .first()
+            .map(|binding| binding.label())
+    };
+
+    vec![
+        Item {
+            event: HeaderAction::Columns,
+            label: "Columns and sorting".to_owned(),
+            accelerator: accelerator(Action::ToggleColumns),
+            separated: false,
+        },
+        Item {
+            event: HeaderAction::Settings,
+            label: "Settings".to_owned(),
+            accelerator: accelerator(Action::ToggleSettings),
+            separated: false,
+        },
+        Item {
+            event: HeaderAction::Shortcuts,
+            label: "Keyboard shortcuts".to_owned(),
+            accelerator: accelerator(Action::ToggleHelp),
+            separated: true,
+        },
+    ]
+}
+
 /// How tall a menu of these items is.
 #[must_use]
-pub fn height(items: &[Item]) -> f32 {
+pub fn height<E>(items: &[Item<E>]) -> f32 {
     let rows = items.len() as f32 * ROW_HEIGHT;
     let rules = items.iter().filter(|item| item.separated).count() as f32 * SEPARATOR;
     rows + rules + PADDING * 2.0
@@ -151,11 +206,12 @@ pub fn position(at: Point, menu: Size, available: Size) -> Point {
 /// Builds the menu layer: the panel, and a sheet behind it that closes on a
 /// click anywhere else.
 #[must_use]
-pub fn view<'a, Message: Clone + 'a>(
-    items: Vec<Item>,
+pub fn view<'a, E: Copy + 'a, Message: Clone + 'a>(
+    items: Vec<Item<E>>,
     at: Point,
     theme: &Theme,
-    on_event: impl Fn(Event) -> Message + Copy + 'a,
+    on_event: impl Fn(E) -> Message + Copy + 'a,
+    on_dismiss: Message,
 ) -> Element<'a, Message, Theme> {
     let panel_style = theme.menu_style();
     let muted = theme.text_style(theme.muted_colour());
@@ -210,7 +266,7 @@ pub fn view<'a, Message: Clone + 'a>(
         stack![
             // A click anywhere else closes it. The same sheet the table uses
             // to keep a column drag alive once the pointer leaves the divider.
-            mouse_area(Space::new().width(Fill).height(Fill)).on_press(on_event(Event::Dismiss)),
+            mouse_area(Space::new().width(Fill).height(Fill)).on_press(on_dismiss.clone()),
             pin(panel).x(origin.x).y(origin.y),
         ]
         .width(Fill)
@@ -262,16 +318,16 @@ mod tests {
 
     #[test]
     fn the_menu_offers_what_a_mouse_could_not_otherwise_reach() {
-        let menu_items = items(&track(), &Keymap::standard());
-        let events: Vec<Event> = menu_items.iter().map(|item| item.event).collect();
+        let menu_items = track_items(&track(), &Keymap::standard());
+        let events: Vec<TrackAction> = menu_items.iter().map(|item| item.event).collect();
         assert_eq!(
             events,
             vec![
-                Event::PlayAlbum,
-                Event::ShowArtwork,
-                Event::Properties,
-                Event::FilterArtist,
-                Event::FilterAlbum,
+                TrackAction::PlayAlbum,
+                TrackAction::ShowArtwork,
+                TrackAction::Properties,
+                TrackAction::FilterArtist,
+                TrackAction::FilterAlbum,
             ]
         );
     }
@@ -281,11 +337,11 @@ mod tests {
         // Invariant 6: the right-click action on a specific track is the one
         // documented exception to artwork following what is playing. Dropping
         // it while rearranging this menu would quietly break that.
-        let menu_items = items(&track(), &Keymap::standard());
+        let menu_items = track_items(&track(), &Keymap::standard());
         assert!(
             menu_items
                 .iter()
-                .any(|item| item.event == Event::ShowArtwork)
+                .any(|item| item.event == TrackAction::ShowArtwork)
         );
     }
 
@@ -298,10 +354,10 @@ mod tests {
         track.artist = "BAND-MAID feat. Someone".to_owned();
         track.album_artist = "BAND-MAID".to_owned();
 
-        let menu_items = items(&track, &Keymap::standard());
+        let menu_items = track_items(&track, &Keymap::standard());
         let artist = menu_items
             .iter()
-            .find(|item| item.event == Event::FilterArtist)
+            .find(|item| item.event == TrackAction::FilterArtist)
             .map(|item| item.label.clone())
             .unwrap_or_default();
         assert_eq!(artist, "Filter to BAND-MAID");
@@ -311,10 +367,10 @@ mod tests {
     fn the_accelerator_comes_from_the_keymap_rather_than_the_menu() {
         // §8's principle: a binding that changes changes this. Written down
         // here it would be wrong the first time anyone edited the keymap.
-        let menu_items = items(&track(), &Keymap::standard());
+        let menu_items = track_items(&track(), &Keymap::standard());
         let properties = menu_items
             .iter()
-            .find(|item| item.event == Event::Properties)
+            .find(|item| item.event == TrackAction::Properties)
             .and_then(|item| item.accelerator.clone());
         assert_eq!(properties.as_deref(), Some("Ctrl+I"));
 
@@ -323,10 +379,60 @@ mod tests {
             name: "empty".to_owned(),
             bindings: Vec::new(),
         };
-        let unbound_items = items(&track(), &unbound);
+        let unbound_items = track_items(&track(), &unbound);
         assert!(
             unbound_items.iter().all(|item| item.accelerator.is_none()),
             "an unbound action invented a keystroke"
+        );
+    }
+
+    // ------------------------------------------------------- header items --
+
+    #[test]
+    fn the_header_menu_offers_the_three_panels_that_had_buttons() {
+        let menu_items = header_items(&Keymap::standard());
+        let events: Vec<HeaderAction> = menu_items.iter().map(|item| item.event).collect();
+        assert_eq!(
+            events,
+            vec![
+                HeaderAction::Columns,
+                HeaderAction::Settings,
+                HeaderAction::Shortcuts,
+            ]
+        );
+    }
+
+    #[test]
+    fn the_header_menu_says_the_keystrokes_out_loud() {
+        // The reason for collapsing three buttons into a menu rather than
+        // simply deleting two of them: all three had a keystroke and none of
+        // them was stated anywhere a mouse would find it. Read from the
+        // keymap, as §8's cheatsheet is, so a rebinding changes this.
+        let menu_items = header_items(&Keymap::standard());
+        let shown: Vec<Option<String>> = menu_items
+            .iter()
+            .map(|item| item.accelerator.clone())
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                Some("Ctrl+,".to_owned()),
+                Some("Ctrl+;".to_owned()),
+                Some("?".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unbound_panel_shows_no_keystroke_rather_than_an_empty_gap() {
+        let unbound = Keymap {
+            name: "empty".to_owned(),
+            bindings: Vec::new(),
+        };
+        assert!(
+            header_items(&unbound)
+                .iter()
+                .all(|item| item.accelerator.is_none())
         );
     }
 
@@ -395,7 +501,7 @@ mod tests {
 
     #[test]
     fn the_panel_is_as_tall_as_what_is_in_it() {
-        let menu_items = items(&track(), &Keymap::standard());
+        let menu_items = track_items(&track(), &Keymap::standard());
         let height = height(&menu_items);
         assert!(
             height > ROW_HEIGHT * menu_items.len() as f32,

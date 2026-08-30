@@ -1,4 +1,4 @@
-//! The transport's symbols, drawn rather than typed.
+//! The application's symbols, drawn rather than typed.
 //!
 //! ## Why these are geometry and not characters
 //!
@@ -48,12 +48,16 @@ pub enum Icon {
     /// the rest, so the empty state does not reach for a font either -- it was
     /// the last U+266A in the bar.
     Note,
+    /// The header's overflow menu. A `⋯` character would put the header back
+    /// where the transport was: at the mercy of whichever font the machine has
+    /// one in, if it has one at all.
+    More,
 }
 
 impl Icon {
     /// Every icon, so the set can be checked for gaps.
     #[must_use]
-    pub const fn all() -> [Self; 10] {
+    pub const fn all() -> [Self; 11] {
         [
             Self::Previous,
             Self::Play,
@@ -65,6 +69,7 @@ impl Icon {
             Self::JumpToPlaying,
             Self::Queue,
             Self::Note,
+            Self::More,
         ]
     }
 
@@ -78,7 +83,8 @@ impl Icon {
             | Self::RepeatOne
             | Self::JumpToPlaying
             | Self::Queue
-            | Self::Note => Emphasis::Secondary,
+            | Self::Note
+            | Self::More => Emphasis::Secondary,
         }
     }
 
@@ -291,6 +297,12 @@ fn draw(icon: Icon, frame: &mut Frame, origin: Point, glyph: f32, pen: IconPen) 
             frame.fill(&Path::circle(at(0.3, 0.76), glyph * 0.22), pen.fill());
             bar(frame, 0.48, 0.06, 0.78, 1.2);
             line(frame, (0.52, 0.1), (0.9, 0.26));
+        }
+        // Three dots: there is more here than fits.
+        Icon::More => {
+            for x in [0.15_f32, 0.5, 0.85] {
+                frame.fill(&Path::circle(at(x, 0.5), stroke * 0.9), pen.fill());
+            }
         }
         // Three lines: a list of what is coming.
         Icon::Queue => {

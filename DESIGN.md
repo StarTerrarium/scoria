@@ -401,6 +401,8 @@ pub enum BrowserPlacement { Off, Top, Left }
 
 The table, columns, transport bar, search field, selection model and keybinds are identical across all three. A keystroke cycles the value.
 
+**In the header it is one segmented control, not three buttons.** All three alternatives stay named and stay one click away -- a mouse should point at the layout it wants rather than clicking twice to pass through the one it does not, and a cycling key can never say what the alternatives are. But it is a single setting with three values, and drawn as three separate buttons beside a label it read as four separate items, with its accent meaning "the current placement" a few pixels from where the same accent meant "this panel is open". Segmenting it says what it is and gives the accent back one meaning at a time.
+
 | Placement | Character |
 |---|---|
 | `Left` | Panes side by side, each full height. Many artists visible. Costs ~460 px of table width. |
@@ -642,9 +644,9 @@ Cover art, transport, possibly a visualiser. Nothing else. It is the one place w
 
 Same process, same playback, one keystroke in and the same keystroke out. Not a second window. Resist adding a queue list or a search box; that would make it a fourth layout with all the synchronisation problems that implies.
 
-### 9.6 The track menu
+### 9.6 Menus
 
-A right-click on a track opens a small menu at the pointer.
+A right-click on a track opens a small menu at the pointer, and the header's overflow opens the same widget with different contents.
 
 It exists because the mouse had no way to reach §9.3's metadata -- `Ctrl+I` was the only path -- and because two things that were built could not be reached at all: playing just an album (§6.4), and playing a single track. Every item is something the application could already do. The menu is the door, not the feature.
 
@@ -653,6 +655,10 @@ It exists because the mouse had no way to reach §9.3's metadata -- `Ctrl+I` was
 Showing the album art is one item rather than the whole gesture. Invariant 6 makes that the single exception to artwork following what is playing, so it survives the rearrangement rather than being replaced by it.
 
 The keystroke shown beside an item is read from the keymap, as §8's cheatsheet is. An item with no binding shows nothing, and a binding added later appears without anyone editing the menu.
+
+**The header's overflow holds the panels that had a button each.** `Columns`, `Settings` and `Shortcuts` sat in a row of look-alike controls next to the browser placement, which is not a panel at all -- there because there was nowhere else, doing three things of one kind beside a fourth of another. They share one affordance now.
+
+Collapsing them rather than deleting two of them is deliberate. Each has a keystroke and none of them was stated anywhere a mouse would find it; the menu says all three, read from the keymap as the cheatsheet is. `Columns` also has a better mouse path than its button ever was -- right-clicking the table's column headers, which is where the columns are -- and the menu is where someone finds out that panel exists at all.
 
 It opens where the click was. `mouse_area`'s right-press carries no position, so the pointer is recorded in the event filter rather than sent as a message -- every message rebuilds the view, and the pointer changes on every pixel of every movement.
 
