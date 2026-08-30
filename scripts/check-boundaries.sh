@@ -167,4 +167,50 @@ if command -v cargo >/dev/null; then
   fi
 fi
 
+# Invariant 3 / DESIGN.md 11: a widget helper nothing calls is a feature
+# nobody sees.
+#
+# `Column::value_for` shipped with a marker constant, a commit message and
+# 26 passing tests, and the table never called it -- so the now-playing
+# glyph DESIGN.md 11 requires had never once rendered. The tests passed
+# because they called the helper directly. Nothing was watching the seam
+# between the helper and the row that draws it.
+#
+# So: every `pub fn` under widgets/ must be named somewhere outside its own
+# definition and outside a test module. Test-only helpers belong in the test
+# module that uses them.
+#
+# A tripwire rather than a proof: it matches on the bare name, so a helper
+# called something that appears in prose elsewhere -- `view`, `value` -- is
+# mentioned often enough to pass whether or not anyone calls it. It catches
+# the distinctive names, which is where this mistake actually happens.
+if [ -d scoria-gui/src/widgets ]; then
+  # Production code only: test modules are conventionally last in the file.
+  production=$(mktemp)
+  find scoria-gui/src scoria-bin/src -name '*.rs' 2>/dev/null | sort | while read -r f; do
+    sed '/^#\[cfg(test)\]/,$d' "$f"
+  done > "$production"
+
+  uncalled=$(
+    find scoria-gui/src/widgets -name '*.rs' 2>/dev/null | sort | while read -r f; do
+      sed '/^#\[cfg(test)\]/,$d' "$f" \
+        | grep -oE '^[[:space:]]*pub (const )?fn [a-z_][a-z_0-9]*' \
+        | grep -oE '[a-z_][a-z_0-9]*$' | while read -r name; do
+          # The definition itself is one mention; anything else is a caller.
+          n=$(grep -cwF "$name" "$production")
+          [ "$n" -le 1 ] && echo "$f: $name"
+        done
+    done
+  )
+  rm -f "$production"
+
+  if [ -n "$uncalled" ]; then
+    fail "a widget function nothing calls:"
+    echo "$uncalled" | sed 's/^/       /'
+    echo "     A helper with no caller is a feature that never renders."
+  else
+    pass "every widget function has a caller"
+  fi
+fi
+
 exit $status

@@ -153,8 +153,16 @@ scoria-tui/ arrives post-1.0. It is deliberately not an empty crate until then.
 `./scripts/check-boundaries.sh` checks the invariants above that the compiler
 cannot express: core's dependency graph is free of UI crates, there is only one
 track table, iced `Color` never leaves `theme/`, raw SQL never leaves `db/`, no
-panic lint has been `allow`ed outside a test module, and nothing in the
-dependency graph can reach the internet.
+panic lint has been `allow`ed outside a test module, every `Column` is offered
+in the panel that turns it on, nothing in the dependency graph can reach the
+internet, and no `pub fn` under `widgets/` is left without a caller.
+
+That last one exists because a helper nobody calls is a feature nobody sees.
+It has happened: the now-playing marker `DESIGN.md` §11 requires shipped with
+a constant, a commit message and 26 passing tests, and the table never called
+it. Unit tests do not catch this, because they call the helper directly --
+which is the seam that broke.
+
 CI runs it on every push. Run it before committing; if you add an invariant to
 this file, add a check for it there too.
 
