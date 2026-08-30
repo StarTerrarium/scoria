@@ -114,6 +114,20 @@ uninstall:
 bench-query count="100000":
     cargo run --release -p scoria-core --example query_scale -- {{count}}
 
+# Writes a synthetic library to a temporary directory and scans it repeatedly.
+# The number that matters is the rescan: the watcher wakes on any change under
+# the root, and the scanner reads every file's tags every time.
+
+# Benchmark scanning and rescanning.
+bench-scan count="10000":
+    cargo run --release -p scoria-core --example scan_scale -- {{count}}
+
+# What one second of frames costs to prepare, against a virtualised table.
+
+# Benchmark the per-frame cost of the track table.
+bench-frame count="100000":
+    cargo run --release -p scoria-core --example frame_cost -- {{count}}
+
 # Advisory only: does not fail, and most hits are fine. See the
 # arithmetic_side_effects note in Cargo.toml for what is deliberately not denied.
 
