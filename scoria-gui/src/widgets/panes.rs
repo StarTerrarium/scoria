@@ -33,7 +33,10 @@ pub struct PaneRow {
 /// What a pane needs in order to draw itself.
 pub struct PaneView<'a> {
     pub heading: &'a str,
-    pub rows: Vec<PaneRow>,
+    /// Borrowed, not owned. A large library has thousands of album artists,
+    /// and this is built on every frame -- cloning a `String` per row forty
+    /// times a second to draw the dozen that are on screen.
+    pub rows: &'a [PaneRow],
     /// The pinned `All (n)` count.
     pub total: usize,
     pub scroll_offset: f32,

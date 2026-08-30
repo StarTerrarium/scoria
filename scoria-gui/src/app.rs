@@ -108,7 +108,14 @@ pub struct App {
     /// the query engine's answer, not something the view recomputes.
     artists: Vec<panes::PaneRow>,
     artist_total: usize,
-    albums: Vec<(scoria_core::AlbumId, panes::PaneRow)>,
+    /// The album pane's rows, and the ids they stand for, in step.
+    ///
+    /// Two lists rather than a list of pairs so the rows can be handed to the
+    /// pane as a slice. Albums are filtered by id -- two can share a title --
+    /// but the pane draws only labels and counts, and it draws them every
+    /// frame.
+    albums: Vec<panes::PaneRow>,
+    album_ids: Vec<scoria_core::AlbumId>,
     album_total: usize,
     artist_scroll: f32,
     album_scroll: f32,
@@ -231,6 +238,7 @@ impl App {
             artists: Vec::new(),
             artist_total: 0,
             albums: Vec::new(),
+            album_ids: Vec::new(),
             album_total: 0,
             artist_scroll: 0.0,
             album_scroll: 0.0,
@@ -329,19 +337,15 @@ impl App {
                     .collect();
 
                 self.album_total = outcome.albums.total;
+                self.album_ids = outcome.albums.rows.iter().map(|r| r.id).collect();
                 self.albums = outcome
                     .albums
                     .rows
                     .into_iter()
-                    .map(|r| {
-                        (
-                            r.id,
-                            panes::PaneRow {
-                                label: r.label,
-                                count: r.count,
-                                selected: r.selected,
-                            },
-                        )
+                    .map(|r| panes::PaneRow {
+                        label: r.label,
+                        count: r.count,
+                        selected: r.selected,
                     })
                     .collect();
                 self.status = format!(
@@ -890,7 +894,7 @@ impl App {
                 self.reset_view();
             }
             panes::Event::Select(index) => {
-                if let Some((id, _)) = self.albums.get(index) {
+                if let Some(id) = self.album_ids.get(index) {
                     self.selection.albums = vec![*id];
                     self.reset_view();
                 }
@@ -1035,8 +1039,9 @@ impl App {
     fn filter_summary(&self) -> Option<String> {
         let artists = &self.selection.album_artists;
         let albums: Vec<&str> = self
-            .albums
+            .album_ids
             .iter()
+            .zip(&self.albums)
             .filter(|(id, _)| self.selection.albums.contains(id))
             .map(|(_, row)| row.label.as_str())
             .collect();
@@ -1402,12 +1407,6 @@ impl App {
             .position(|line| matches!(line, table::Line::Track(i) if *i == row))
     }
 
-    fn tracks(&self) -> Vec<&Track> {
-        self.session
-            .as_ref()
-            .map_or_else(Vec::new, |s| s.index().rows(&self.rows))
-    }
-
     fn track(&self, id: TrackId) -> Option<&Track> {
         self.session.as_ref()?.index().track(id)
     }
@@ -1427,7 +1426,9 @@ impl App {
 
         let table_view = table::TableView {
             lines: &self.lines,
-            rows: self.tracks(),
+            // Resolved as the table draws, so a six-figure result costs a
+            // few dozen lookups a frame rather than a hundred thousand.
+            rows: Box::new(|index| self.rows.get(index).and_then(|id| self.track(*id))),
             selected: &self.selected,
             playing: self.playing,
             playing_row: None,
@@ -1552,7 +1553,7 @@ impl App {
                 artists: panes::view(
                     panes::PaneView {
                         heading: "ALBUM ARTIST",
-                        rows: self.artists.clone(),
+                        rows: &self.artists,
                         total: self.artist_total,
                         scroll_offset: self.artist_scroll,
                         theme: &self.theme,
@@ -1563,7 +1564,7 @@ impl App {
                 albums: panes::view(
                     panes::PaneView {
                         heading: "ALBUM",
-                        rows: self.albums.iter().map(|(_, row)| row.clone()).collect(),
+                        rows: &self.albums,
                         total: self.album_total,
                         scroll_offset: self.album_scroll,
                         theme: &self.theme,
@@ -1646,7 +1647,10 @@ impl App {
                 overlays::queue::QueueView {
                     columns: &self.settings.columns,
                     lines: &self.queue_lines,
-                    rows: self.queue_rows(),
+                    rows: Box::new(|index| {
+                        let queue = self.queue.as_ref()?;
+                        self.track(*queue.tracks().get(index)?)
+                    }),
                     position: self
                         .queue
                         .as_ref()
@@ -1682,17 +1686,6 @@ impl App {
                 })
             }
         }
-    }
-
-    /// The snapshot's tracks, resolved through the index.
-    fn queue_rows(&self) -> Vec<&Track> {
-        let Some(queue) = &self.queue else {
-            return Vec::new();
-        };
-        let Some(session) = &self.session else {
-            return Vec::new();
-        };
-        session.index().rows(queue.tracks())
     }
 
     /// A caption naming the album some artwork belongs to.

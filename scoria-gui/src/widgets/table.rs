@@ -129,9 +129,18 @@ pub struct Reorder {
 /// What the table needs in order to draw itself.
 pub struct TableView<'a> {
     pub lines: &'a [Line],
-    /// Owned, so the whole view can move into the `responsive` closure -- which
-    /// is what lets the table measure its own viewport.
-    pub rows: Vec<&'a Track>,
+    /// Resolves a row index to the track on it.
+    ///
+    /// A function rather than a list, because the table is virtualised: it
+    /// builds a few dozen rows out of a library that §14 says to assume is
+    /// six figures, and it cannot know which few dozen until `responsive` has
+    /// measured the viewport. Handed the whole list instead, the caller paid
+    /// to resolve a hundred thousand ids on every frame so that forty of them
+    /// could be drawn.
+    ///
+    /// Boxed and owned so the whole view can move into the `responsive`
+    /// closure, which is what lets the table measure itself.
+    pub rows: Box<dyn Fn(usize) -> Option<&'a Track> + 'a>,
     /// Every selected row. A set rather than an index, because §7.3's
     /// selection model is shared by every layout and a range selection is one
     /// of the things it has to be able to express.
@@ -233,7 +242,7 @@ pub fn view<'a, Message: Clone + 'a>(
             };
             rows = rows.push(match line {
                 Line::Header { label, .. } => group_header(label, table.theme),
-                Line::Track(row_index) => match table.rows.get(*row_index) {
+                Line::Track(row_index) => match (table.rows)(*row_index) {
                     Some(track) => track_row(track, *row_index, &table, &on_event),
                     None => Space::new().height(Length::Fixed(ROW_HEIGHT)).into(),
                 },

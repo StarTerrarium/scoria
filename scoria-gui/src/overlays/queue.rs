@@ -31,7 +31,7 @@ pub struct QueueView<'a> {
     /// The snapshot, in its own order. Already-played tracks included: §9.2
     /// says the whole snapshot, because "what plays next" is only meaningful
     /// against where you are in it.
-    pub rows: Vec<&'a Track>,
+    pub rows: Box<dyn Fn(usize) -> Option<&'a Track> + 'a>,
     /// Index into the snapshot of the track playing now.
     pub position: Option<usize>,
     /// The row the user has clicked or arrowed onto, as a set of one.
@@ -58,7 +58,9 @@ pub fn view<'a, Message: Clone + 'a>(
     queue: QueueView<'a>,
     on_event: impl Fn(table::Event) -> Message + Copy + 'a,
 ) -> Element<'a, Message, Theme> {
-    if queue.rows.is_empty() {
+    // The display list, not the resolver: a snapshot with rows in it is not
+    // empty just because a track has gone missing from the index.
+    if queue.lines.is_empty() {
         let muted = queue.theme.text_style(queue.theme.muted_colour());
         return container(
             text("Nothing queued")
