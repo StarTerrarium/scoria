@@ -26,10 +26,18 @@ use anyhow::Result;
 /// If the library cannot be opened, or the window cannot be created.
 pub fn run() -> Result<()> {
     // The library is opened before the window, so a failure to read it is a
-    // clear error on the terminal rather than an empty window.
-    app::App::new()?;
+    // clear error on the terminal rather than an empty window -- and the one
+    // that is opened is the one that gets used.
+    //
+    // Building it twice was not merely wasteful. `App::new` starts watching,
+    // and watching begins with a catch-up scan; dropping the spare joined that
+    // scan thread, which only checks whether it should stop between scans. So
+    // opening the window waited for a full pass over the library -- every
+    // file's tags, since the scanner has no mtime shortcut -- and then a second
+    // pass started behind the window that finally appeared.
+    let first = std::cell::RefCell::new(Some(app::App::new()?));
 
-    iced::application(boot, app::App::update, app::App::view)
+    iced::application(move || boot(&first), app::App::update, app::App::view)
         .title(app::App::title)
         .theme(app::App::theme)
         .subscription(app::App::subscription)
@@ -73,14 +81,19 @@ fn icon() -> Option<iced::window::Icon> {
 
 /// iced calls this to build the initial state.
 ///
-/// It re-opens rather than moving one in, because `application` takes a `Fn`
-/// that may be called more than once. Opening is cheap -- the expensive part,
-/// scanning, is a command.
-fn boot() -> app::App {
-    app::App::new().unwrap_or_else(|_| {
-        // `run` already opened the library successfully, so reaching here means
-        // it became unreadable in between. Better an empty window that says so
-        // than a panic.
-        app::App::disconnected("the library could not be opened".to_owned())
-    })
+/// Hands over the application `run` already built. `application` takes a `Fn`
+/// that may be called more than once, so this still copes with a second call
+/// -- it just builds a second application then, rather than throwing the first
+/// one away every time.
+fn boot(first: &std::cell::RefCell<Option<app::App>>) -> app::App {
+    first
+        .borrow_mut()
+        .take()
+        .or_else(|| app::App::new().ok())
+        .unwrap_or_else(|| {
+            // `run` opened the library successfully, so reaching here means it
+            // became unreadable in between. Better an empty window that says
+            // so than a panic.
+            app::App::disconnected("the library could not be opened".to_owned())
+        })
 }
