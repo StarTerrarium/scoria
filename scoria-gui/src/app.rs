@@ -1809,7 +1809,7 @@ impl App {
             // Recorded whatever else happens, including while something else
             // has captured the event: the pointer is still where it is.
             if let iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) = event {
-                POINTER.with(|pointer| pointer.set(position));
+                shared::set_pointer(position);
                 return None;
             }
 
@@ -1837,32 +1837,62 @@ impl App {
     }
 }
 
-thread_local! {
+/// State the subscription and the application both touch.
+///
+/// **Shared across threads, not thread-local.** `listen_with` takes a plain
+/// `fn`, so nothing can travel in with the closure and it has to reach for
+/// something it can name. The obvious answer is a thread-local, and it is
+/// wrong: iced's `thread-pool` feature is on by default, so a subscription
+/// runs on a pool thread while `update` and `view` run on the main one. A
+/// thread-local written by one is invisible to the other, and each simply sees
+/// its own initial value.
+///
+/// That failed quietly in both directions. The keymap looked published because
+/// the value the subscription thread never received was the same
+/// `Keymap::standard()` it had started with. The pointer did not have that
+/// luck: `view` read its own thread's untouched `ORIGIN`, and the menu opened
+/// in the corner of the window every time.
+mod shared {
+    use crate::keymap::Keymap;
+    use std::sync::{Mutex, PoisonError};
+
+    /// The keymap key presses resolve against (§10).
+    static KEYMAP: Mutex<Option<Keymap>> = Mutex::new(None);
+
     /// Where the pointer was, last time it moved.
     ///
-    /// `mouse_area::on_right_press` carries no position, and a menu has to
-    /// open where the click was. Recorded in the event filter rather than sent
-    /// as a message: every message rebuilds the view, and this changes on every
-    /// pixel of every mouse movement, so a message would mean rebuilding the
-    /// table for a value almost nothing reads.
-    ///
-    /// Thread-local for the same reason [`KEYMAP`] is -- `listen_with` takes a
-    /// plain `fn`, so nothing can travel in with the closure, and iced's event
-    /// loop is single-threaded.
-    static POINTER: std::cell::Cell<iced::Point> = const {
-        std::cell::Cell::new(iced::Point::ORIGIN)
-    };
+    /// Recorded rather than sent as a message: every message rebuilds the
+    /// view, and this changes on every pixel of every movement, so a message
+    /// would mean rebuilding the table for a value almost nothing reads.
+    static POINTER: Mutex<(f32, f32)> = Mutex::new((0.0, 0.0));
 
-    /// The keymap the subscription resolves against.
-    ///
-    /// `listen_with` takes a plain `fn`, not a closure, so the map cannot be
-    /// captured. It is thread-local rather than global because iced's event
-    /// loop is single-threaded, and this keeps the keymap a value that can be
-    /// swapped -- which is the whole point of §10.
-    ///
-    /// `App::subscription` publishes `App::keymap` here. The initial value is
-    /// only what applies before the first subscription is asked for.
-    static KEYMAP: std::cell::RefCell<Keymap> = std::cell::RefCell::new(Keymap::standard());
+    /// A poisoned lock means a thread panicked holding it. Both of these are
+    /// plain values with no invariant to violate, so reading through the
+    /// poison is right: the panic is the failure worth reporting, not this.
+    pub fn publish_keymap(keymap: &Keymap) {
+        let mut published = KEYMAP.lock().unwrap_or_else(PoisonError::into_inner);
+        if published.as_ref() != Some(keymap) {
+            *published = Some(keymap.clone());
+        }
+    }
+
+    pub fn with_keymap<T>(f: impl FnOnce(&Keymap) -> T) -> T {
+        let published = KEYMAP.lock().unwrap_or_else(PoisonError::into_inner);
+        match published.as_ref() {
+            Some(keymap) => f(keymap),
+            // Before the first subscription is asked for.
+            None => f(&Keymap::standard()),
+        }
+    }
+
+    pub fn set_pointer(position: iced::Point) {
+        *POINTER.lock().unwrap_or_else(PoisonError::into_inner) = (position.x, position.y);
+    }
+
+    pub fn pointer() -> iced::Point {
+        let (x, y) = *POINTER.lock().unwrap_or_else(PoisonError::into_inner);
+        iced::Point::new(x, y)
+    }
 }
 
 /// Makes `keymap` the one key presses resolve against.
@@ -1870,16 +1900,12 @@ thread_local! {
 /// Guarded on equality because iced asks for the subscription after every
 /// message, and this is a poll-driven application.
 fn publish_keymap(keymap: &Keymap) {
-    KEYMAP.with(|published| {
-        if *published.borrow() != *keymap {
-            published.borrow_mut().clone_from(keymap);
-        }
-    });
+    shared::publish_keymap(keymap);
 }
 
 /// Where the pointer is now.
 fn pointer() -> iced::Point {
-    POINTER.with(std::cell::Cell::get)
+    shared::pointer()
 }
 
 /// What a key press means, according to the published keymap.
@@ -1899,8 +1925,7 @@ fn resolve_key(
     modified_key: &iced::keyboard::Key,
     modifiers: iced::keyboard::Modifiers,
 ) -> Option<Action> {
-    KEYMAP.with(|published| {
-        let keymap = published.borrow();
+    shared::with_keymap(|keymap| {
         keymap
             .resolve_iced(modified_key, modifiers)
             .or_else(|| keymap.resolve_iced(key, modifiers))
@@ -2137,6 +2162,19 @@ mod tests {
         assert_eq!(gain, Some("not tagged (plays at 0 dB)"));
     }
 
+    /// Serialises the tests that publish a keymap.
+    ///
+    /// It is process-wide now rather than thread-local -- which is the fix --
+    /// and the cost of that is that two tests publishing different keymaps at
+    /// once will read each other's. Caught as a one-in-five flake rather than
+    /// in CI a month from now, which is the argument for running the suite
+    /// more than once after a change like this.
+    fn published() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// The pair iced delivers for one press: the key without modifiers, and
     /// the key with them applied.
     ///
@@ -2153,7 +2191,64 @@ mod tests {
     }
 
     #[test]
+    fn what_the_application_publishes_reaches_the_subscription_thread() {
+        let _published = published();
+        // The bug the previous test could not see. `listen_with` runs on a
+        // thread pool -- iced turns that feature on by default -- while
+        // `update` and `view` run on the main thread. Held in a thread-local,
+        // the keymap was published on one and read on the other, and the
+        // reader simply saw its own untouched initial value. It looked
+        // published only because that value was `Keymap::standard()` already.
+        //
+        // The earlier test exercised both halves on one thread, so it passed
+        // throughout. This one does not, which is the whole point of it.
+        let vim = Keymap {
+            name: "Vim".to_owned(),
+            bindings: vec![Binding::new(
+                Trigger::Char('j'),
+                crate::keymap::Mods::NONE,
+                Action::MoveDown,
+            )],
+        };
+        publish_keymap(&vim);
+
+        let resolved = std::thread::spawn(|| {
+            resolve_key(
+                &Key::Character("j".into()),
+                &Key::Character("j".into()),
+                Modifiers::empty(),
+            )
+        })
+        .join();
+
+        assert_eq!(
+            resolved.ok().flatten(),
+            Some(Action::MoveDown),
+            "the keymap did not cross the thread it is read on"
+        );
+        publish_keymap(&Keymap::standard());
+    }
+
+    #[test]
+    fn the_pointer_crosses_from_the_subscription_thread_to_the_view() {
+        // The same fault, the other way round, and this one had no lucky
+        // default to hide behind: the pointer is recorded by the subscription
+        // and read by `view`, so a thread-local meant `view` always saw the
+        // origin and the menu always opened in the corner of the window.
+        std::thread::spawn(|| shared::set_pointer(iced::Point::new(640.0, 480.0)))
+            .join()
+            .ok();
+
+        let seen = pointer();
+        assert!(
+            (seen.x - 640.0).abs() < f32::EPSILON && (seen.y - 480.0).abs() < f32::EPSILON,
+            "the pointer did not cross threads: {seen:?}"
+        );
+    }
+
+    #[test]
     fn shift_slash_opens_the_cheatsheet_rather_than_the_search() {
+        let _published = published();
         // The press as iced actually reports it: `key` is the key without
         // modifiers, so `/`, and `modified_key` is what it typed, so `?`.
         // Reading only the first meant `?` could not be bound at all -- and
@@ -2168,6 +2263,7 @@ mod tests {
 
     #[test]
     fn a_bare_slash_still_opens_the_search() {
+        let _published = published();
         // The binding `?` displaced. Unshifted, both keys are `/`.
         assert_eq!(
             press("/", "/", Modifiers::empty()),
@@ -2177,6 +2273,7 @@ mod tests {
 
     #[test]
     fn a_control_chord_survives_the_modified_key() {
+        let _published = published();
         // Ctrl chords are on the key, not on what it would have typed, and a
         // platform is free to report something odd as the modified key. The
         // fallback to the unmodified key is what keeps them working.
@@ -2193,6 +2290,7 @@ mod tests {
 
     #[test]
     fn key_presses_resolve_against_the_keymap_the_application_published() {
+        let _published = published();
         // The seam §10 is built around, and the one that was not connected:
         // `App::keymap` fed the cheatsheet while key presses resolved against
         // a thread-local nothing ever wrote. Both were `Keymap::standard()`,

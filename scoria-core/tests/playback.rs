@@ -838,3 +838,117 @@ fn repeat_one_does_not_preload() {
     std::thread::sleep(Duration::from_millis(250));
     assert_eq!(rig.control.preloaded(), None);
 }
+
+// ------------------------------------------------- §6.4, through a Session --
+
+mod common;
+
+/// What `SourceSpec::Album` actually snapshots.
+///
+/// This path has been in the core, handled and untouched, since it was
+/// written: nothing constructed a `SourceSpec::Album` until a track's
+/// right-click menu did. Its first caller deserves a test that is not the
+/// caller.
+#[test]
+fn playing_an_album_snapshots_the_whole_album_and_nothing_else() {
+    use lofty::prelude::ItemKey;
+    use scoria_core::command::{Command, SourceSpec};
+    use scoria_core::config::Paths;
+    use scoria_core::query::Selection;
+    use scoria_core::session::Session;
+
+    let scratch = common::Scratch::new("play-album");
+    let root = scratch.root();
+    // Two albums, so a snapshot that took the whole library rather than the
+    // album would pass a test that only counted "more than one".
+    for (album, titles) in [
+        (
+            "Duél",
+            ["Tantrum", "Hedonist", "Rogue", "Dark Bile"].as_slice(),
+        ),
+        ("Wallflowers", ["Vortex", "Disclosure"].as_slice()),
+    ] {
+        for (n, title) in titles.iter().enumerate() {
+            scratch.write_track(
+                &root,
+                &format!("Jinjer/{album}/{n}.flac"),
+                &[
+                    (ItemKey::TrackTitle, title),
+                    (ItemKey::AlbumArtist, "Jinjer"),
+                    (ItemKey::AlbumTitle, album),
+                    (ItemKey::TrackNumber, &format!("{}", n + 1)),
+                ],
+            );
+        }
+    }
+
+    let mut session = Session::open(Paths::rooted_at(scratch.path())).unwrap();
+    session.config_mut().root = Some(root);
+    session.rescan(&mut |_| {}).unwrap();
+    session
+        .start_playback(Box::new(MockBackend::new()))
+        .unwrap();
+
+    // The track a right-click would have been on: not the first of its album,
+    // so "the album" and "from here" are distinguishable.
+    let outcome = session.query(&Selection::all()).unwrap();
+    let clicked = outcome
+        .tracks
+        .iter()
+        .copied()
+        .find(|id| {
+            session
+                .index()
+                .track(*id)
+                .is_some_and(|t| t.title == "Dark Bile")
+        })
+        .expect("the fixture did not index");
+    let album = session.index().track(clicked).unwrap().album_id;
+
+    session
+        .handle(Command::PlayFrom {
+            source: SourceSpec::Album(album),
+            at: clicked,
+        })
+        .unwrap();
+
+    // The snapshot arrives as QueueChanged.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut queue = None;
+    while Instant::now() < deadline && queue.is_none() {
+        for event in session.drain_events() {
+            if let Event::QueueChanged(source) = event {
+                queue = Some(source);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let queue = queue.expect("no queue was reported");
+
+    let titles: Vec<String> = queue
+        .tracks()
+        .iter()
+        .filter_map(|id| session.index().track(*id))
+        .map(|t| t.title.clone())
+        .collect();
+
+    assert_eq!(
+        queue.len(),
+        4,
+        "expected the four tracks of Duél, got {titles:?}"
+    );
+    // And from the album's start, not from the track that was clicked. "Play
+    // album" says the album; beginning it four tracks in because that is where
+    // the pointer was is not what it says.
+    assert_eq!(
+        queue
+            .current()
+            .and_then(|id| session.index().track(id).map(|t| t.title.clone())),
+        Some("Tantrum".to_owned()),
+        "the album did not start at its first track"
+    );
+    assert!(
+        !titles.iter().any(|t| t == "Vortex"),
+        "the snapshot reached past the album into {titles:?}"
+    );
+}

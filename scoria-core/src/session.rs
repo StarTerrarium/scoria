@@ -611,6 +611,16 @@ impl Session {
         if tracks.is_empty() {
             return Err(CoreError::EmptySource);
         }
+        if matches!(spec, SourceSpec::Album(_)) {
+            // "Play album" means the album, from the start. `at` names a track
+            // within a list someone is looking at (§6.3); an album is not that
+            // list, and starting half way through it because that is where the
+            // pointer happened to be is not what the words say.
+            //
+            // Playing an album from a particular track is `Shown` with the
+            // album's tracks, which is a different request.
+            return Ok(PlaybackSource::new(tracks, origin));
+        }
         Ok(PlaybackSource::starting_at(tracks, origin, at))
     }
 

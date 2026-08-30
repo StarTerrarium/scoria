@@ -652,6 +652,8 @@ The keystroke shown beside an item is read from the keymap, as §8's cheatsheet 
 
 It opens where the click was. `mouse_area`'s right-press carries no position, so the pointer is recorded in the event filter rather than sent as a message -- every message rebuilds the view, and the pointer changes on every pixel of every movement.
 
+**That record is shared across threads, not thread-local.** `listen_with` takes a plain `fn`, so nothing travels in with the closure and it has to reach for something it can name -- and the obvious answer, a thread-local, is wrong: iced's thread-pool feature is on by default, so a subscription runs on a pool thread while `update` and `view` run on the main one. Each sees its own initial value and neither sees the other's writes. The pointer read as the origin and the menu opened in the corner of the window every time. The keymap had the same fault and hid it, because the value the subscription thread never received was the same standard map it had already started with.
+
 ---
 
 ## 10. Keyboard
