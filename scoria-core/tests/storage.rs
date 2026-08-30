@@ -65,6 +65,24 @@ fn a_fresh_database_is_migrated_to_the_latest_schema() {
 }
 
 #[test]
+fn counting_a_play_leaves_the_track_findable() {
+    // The trigger was narrowed; searching must still work either side of the
+    // statements that no longer fire it.
+    let mut db = searchable();
+    let id = db.search_tracks("Hurrikan").unwrap()[0];
+
+    db.record_play(id).unwrap();
+    db.set_available(&[id], false).unwrap();
+    db.set_available(&[id], true).unwrap();
+
+    assert_eq!(
+        db.search_tracks("Hurrikan").unwrap(),
+        vec![id],
+        "the search index lost a track that was only played and re-marked"
+    );
+}
+
+#[test]
 fn a_database_written_by_an_older_version_keeps_its_tracks() {
     // Every column since v1 arrived by ALTER TABLE, which is the migration
     // shape most likely to be got wrong -- a rebuild would take the library

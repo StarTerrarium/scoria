@@ -30,6 +30,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 3,
         sql: SCHEMA_V3,
     },
+    Migration {
+        version: 4,
+        sql: SCHEMA_V4,
+    },
 ];
 
 /// Metadata that is shown but never structural.
@@ -57,6 +61,30 @@ ALTER TABLE tracks ADD COLUMN bit_depth      INTEGER;
 /// has genuinely never been played.
 const SCHEMA_V3: &str = "
 ALTER TABLE tracks ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0;
+";
+
+/// Narrows the full-text update trigger to the columns it indexes.
+///
+/// As written in v1 it fired on any `UPDATE tracks` at all, so counting a play
+/// (§6.8) or marking a file missing (§7.4) tore the row out of the search index
+/// and put an identical one back. Correct, and pure waste: neither statement
+/// touches a column `tracks_fts` contains. A library where every track has been
+/// played is a search index that has been rebuilt a track at a time for nothing.
+///
+/// v1 is not edited to fix this, because editing a shipped migration changes
+/// what a new database gets without changing what an existing one has -- which
+/// is how two schemas that are supposed to be the same quietly stop being. A
+/// fresh database therefore builds the v1 trigger and replaces it here.
+const SCHEMA_V4: &str = "
+DROP TRIGGER tracks_fts_update;
+
+CREATE TRIGGER tracks_fts_update
+AFTER UPDATE OF title, artist, album_artist, album ON tracks BEGIN
+    INSERT INTO tracks_fts (tracks_fts, rowid, title, artist, album_artist, album)
+    VALUES ('delete', old.id, old.title, old.artist, old.album_artist, old.album);
+    INSERT INTO tracks_fts (rowid, title, artist, album_artist, album)
+    VALUES (new.id, new.title, new.artist, new.album_artist, new.album);
+END;
 ";
 
 /// The initial schema.
@@ -203,4 +231,76 @@ pub fn migrate(conn: &mut Connection) -> Result<(), CoreError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn migrated() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn).unwrap();
+        conn
+    }
+
+    fn trigger(conn: &Connection, name: &str) -> String {
+        conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
+            [name],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_full_text_index_is_only_disturbed_by_the_columns_it_holds() {
+        // As written in v1 the update trigger fired on any UPDATE at all, so
+        // counting a play (§6.8) or marking a file missing (§7.4) tore the row
+        // out of the search index and put an identical one back. Neither
+        // statement touches a column tracks_fts contains.
+        let sql = trigger(&migrated(), "tracks_fts_update");
+        assert!(
+            sql.contains("UPDATE OF"),
+            "the trigger fires on every column:\n{sql}"
+        );
+        for column in ["title", "artist", "album_artist", "album"] {
+            assert!(
+                sql.contains(column),
+                "{column} is in the index but not in the trigger:\n{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fresh_database_lands_on_the_latest_version() {
+        let conn = migrated();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, latest_version());
+    }
+
+    #[test]
+    fn migrating_twice_changes_nothing() {
+        // Each migration runs only when its version is ahead of the file's, so
+        // re-running must be a no-op rather than a second DROP of a trigger
+        // that is no longer there.
+        let mut conn = migrated();
+        let before = trigger(&conn, "tracks_fts_update");
+        migrate(&mut conn).unwrap();
+        assert_eq!(trigger(&conn, "tracks_fts_update"), before);
+    }
+
+    #[test]
+    fn every_migration_has_a_version_ahead_of_the_one_before_it() {
+        // The list is append-only and applied in order; a version that went
+        // backwards or repeated would silently skip a step.
+        let versions: Vec<i64> = MIGRATIONS.iter().map(|m| m.version).collect();
+        let mut sorted = versions.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(versions, sorted, "migrations are out of order or repeated");
+    }
 }
