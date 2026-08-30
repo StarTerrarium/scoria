@@ -322,4 +322,28 @@ else
   fi
 fi
 
+# No real home directory in the source.
+#
+# Test fixtures and doc examples need absolute paths, and the obvious one to
+# type is your own. A developer's real home path reached three files that way --
+# error.rs, path.rs and tests/storage.rs -- and sat in 103 commits before
+# anything was published. It leaks a login name, which is half of a credential
+# guess, and it is free to fix before a push and a history rewrite afterwards.
+#
+# This comment deliberately does not spell out the offending path: the check
+# scans scripts/ too, so naming it here would make the check fail on itself.
+#
+# Placeholders only. `someone` is what picker.rs and welcome.rs already used;
+# `user` is what config.rs's documented example uses.
+homes=$(git grep -hoIE '/home/[a-z_][a-z0-9_-]*' -- '*.rs' '*.md' '*.toml' 'justfile' 'scripts/*' 2>/dev/null \
+  | sort -u | grep -vE '^/home/(someone|user)$')
+
+if [ -n "$homes" ]; then
+  fail "a real home directory in the source:"
+  echo "$homes" | sed 's/^/       /'
+  echo "     Use /home/someone. A developer's own path leaks a login name."
+else
+  pass "no real home directory in the source"
+fi
+
 exit $status

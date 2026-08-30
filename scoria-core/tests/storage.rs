@@ -749,7 +749,10 @@ fn a_file_written_before_the_library_section_existed_is_moved_into_it() {
     .unwrap();
 
     let config = scoria_core::config::load_library(&path).unwrap();
-    assert_eq!(config.root.as_deref(), Some(Path::new("/home/someone/Music")));
+    assert_eq!(
+        config.root.as_deref(),
+        Some(Path::new("/home/someone/Music"))
+    );
     assert_eq!(config.play_behaviour, PlayBehaviour::WholeLibrary);
     assert!((config.volume() - 0.25).abs() < f32::EPSILON);
 
