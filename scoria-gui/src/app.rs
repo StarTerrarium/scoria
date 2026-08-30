@@ -11,6 +11,7 @@
 use crate::keymap::{Action, Keymap};
 use crate::layouts::{self, Browser, BrowserPlacement};
 use crate::overlays::{self, Overlay};
+use crate::selection::{RowSelection, SortOverride};
 use crate::settings::Settings;
 use crate::theme::Theme;
 use crate::widgets::columns::Column;
@@ -92,7 +93,7 @@ pub struct App {
     paths: Paths,
     /// §7.3: a header click overrides the configured sort transiently, with an
     /// indicator and one action to drop back. It never replaces the chain.
-    sort_override: Option<(scoria_core::SortField, scoria_core::Direction)>,
+    sort_override: SortOverride,
     /// The column edge being dragged, if any.
     resizing_column: Option<usize>,
     /// The heading being dragged to a new position, if any (§7.3).
@@ -120,17 +121,9 @@ pub struct App {
     artist_scroll: f32,
     album_scroll: f32,
 
-    /// The row the keyboard is on, and the rows selected.
-    ///
-    /// Selection is deliberately independent of playback -- §6.1: browsing
-    /// never disturbs what is playing, and the two are allowed to disagree.
-    ///
-    /// `anchor` is where a range selection started, so shift-clicking or
-    /// shift-arrowing extends from the same place rather than from wherever the
-    /// cursor happens to have reached.
-    cursor: Option<usize>,
-    selected: std::collections::BTreeSet<usize>,
-    anchor: Option<usize>,
+    /// The row the keyboard is on and the rows selected. See
+    /// [`crate::selection::RowSelection`], which holds the rules.
+    selection_rows: RowSelection,
     /// Modifiers currently held, so a click can tell plain from shift from
     /// control. Pointer events do not carry them.
     modifiers: crate::keymap::Mods,
@@ -228,7 +221,7 @@ impl App {
             placement: BrowserPlacement::default(),
             settings: Settings::default(),
             paths: Paths::rooted_at(std::env::temp_dir().join("scoria-unconfigured")),
-            sort_override: None,
+            sort_override: SortOverride::default(),
             resizing_column: None,
             reordering: None,
             selection: Selection::all(),
@@ -242,9 +235,7 @@ impl App {
             album_total: 0,
             artist_scroll: 0.0,
             album_scroll: 0.0,
-            cursor: None,
-            selected: std::collections::BTreeSet::new(),
-            anchor: None,
+            selection_rows: RowSelection::default(),
             modifiers: crate::keymap::Mods::NONE,
             playing: None,
             artwork: None,
@@ -360,11 +351,7 @@ impl App {
                 );
                 // Row indices refer to the previous result, so anything past
                 // the end means nothing now.
-                self.selected.retain(|index| *index < self.rows.len());
-                self.anchor = self.anchor.filter(|a| *a < self.rows.len());
-                if self.cursor.is_some_and(|c| c >= self.rows.len()) {
-                    self.cursor = None;
-                }
+                self.selection_rows.retain_within(self.rows.len());
             }
             Err(e) => self.status = format!("query failed: {e}"),
         }
@@ -507,10 +494,14 @@ impl App {
         // have some now.
         self.artwork = None;
 
-        let anchored = self.cursor.and_then(|index| self.rows.get(index).copied());
+        let anchored = self
+            .cursor()
+            .and_then(|index| self.rows.get(index).copied());
         self.refresh();
-        if let Some(track) = anchored {
-            self.cursor = self.rows.iter().position(|id| *id == track);
+        if let Some(track) = anchored
+            && let Some(index) = self.rows.iter().position(|id| *id == track)
+        {
+            self.selection_rows.focus(index, self.rows.len());
         }
 
         self.status = describe(delta, self.rows.len());
@@ -520,7 +511,7 @@ impl App {
         match event {
             table::Event::Select(index) => self.select(index, self.modifiers),
             table::Event::Activate(index) => {
-                self.cursor = Some(index);
+                self.selection_rows.focus(index, self.rows.len());
                 self.play_from_cursor();
             }
             // §9.1's one escape hatch from artwork following playback: a
@@ -530,7 +521,7 @@ impl App {
                 // A right-click on an unselected row moves the selection to it;
                 // on a selected one it leaves the selection alone, so acting on
                 // several rows is not lost to a stray click.
-                if !self.selected.contains(&index) {
+                if !self.selection_rows.rows().contains(&index) {
                     self.select(index, crate::keymap::Mods::NONE);
                 }
                 let album = self
@@ -740,12 +731,12 @@ impl App {
                 self.settings.sort = preset;
                 // Choosing a preset clears the transient override, or a heading
                 // would keep quietly winning over the thing just picked.
-                self.sort_override = None;
+                self.sort_override.clear();
                 self.persist();
                 self.apply_sort();
             }
             E::ClearOverride => {
-                self.sort_override = None;
+                self.sort_override.clear();
                 self.apply_sort();
             }
             E::ToggleColumn(column) => {
@@ -763,36 +754,13 @@ impl App {
     /// configured sort, with a visible indicator and one action to drop back.
     /// It never replaces the configured chain.
     fn sort_by(&mut self, column: Column) {
-        use scoria_core::Direction;
-        let field = column.sort_field();
-
-        self.sort_override = match self.sort_override {
-            // Clicking the same heading again reverses it, and a third time
-            // returns to the configured sort -- so the override is always one
-            // click from being gone.
-            Some((current, Direction::Ascending)) if current == field => {
-                Some((field, Direction::Descending))
-            }
-            Some((current, Direction::Descending)) if current == field => None,
-            _ => Some((field, Direction::Ascending)),
-        };
+        self.sort_override.click(column.sort_field());
         self.apply_sort();
     }
 
     /// Rebuilds the sort chain from the configured preset and any override.
     fn apply_sort(&mut self) {
-        let configured = self.settings.sort.chain();
-        self.selection.sort = match self.sort_override {
-            None => configured,
-            Some((field, direction)) => {
-                // On top of, not instead of: the configured chain still breaks
-                // ties, so an override on a coarse field keeps albums in order
-                // within it.
-                let mut keys = vec![scoria_core::SortKey { field, direction }];
-                keys.extend(configured.keys().iter().copied());
-                scoria_core::SortChain::new(keys)
-            }
-        };
+        self.selection.sort = self.sort_override.over(&self.settings.sort.chain());
         self.refresh();
     }
 
@@ -1067,7 +1035,7 @@ impl App {
     /// view somewhere arbitrary in a list that is now a different length.
     fn reset_view(&mut self) {
         self.scroll_offset = 0.0;
-        self.cursor = None;
+        self.selection_rows.clear();
         self.refresh();
     }
 
@@ -1192,7 +1160,10 @@ impl App {
             Action::ToggleColumns => return self.open_overlay(Overlay::Columns),
             Action::ToggleSettings => return self.open_overlay(Overlay::Settings),
             Action::ShowProperties => {
-                if let Some(id) = self.cursor.and_then(|index| self.rows.get(index).copied()) {
+                if let Some(id) = self
+                    .cursor()
+                    .and_then(|index| self.rows.get(index).copied())
+                {
                     return self.open_overlay(Overlay::Properties(id));
                 }
                 self.status = "select a track first".to_owned();
@@ -1227,7 +1198,7 @@ impl App {
         self.refresh();
 
         if let Some(index) = self.rows.iter().position(|id| *id == playing) {
-            self.cursor = Some(index);
+            self.selection_rows.focus(index, self.rows.len());
             // Centred, not merely brought into view. §6.5 argues that jumping
             // to the playing track needs no album or artist filter because the
             // default sort already surrounds it with its own album and the
@@ -1244,7 +1215,7 @@ impl App {
     /// can. Arrow keys want the minimum, or the view lurches on every press;
     /// arriving somewhere from elsewhere wants the context that surrounds it.
     fn centre_on_cursor(&mut self) -> Task<Message> {
-        let Some(cursor) = self.cursor else {
+        let Some(cursor) = self.cursor() else {
             return Task::none();
         };
         let Some(line) = self.line_of_row(cursor) else {
@@ -1261,70 +1232,24 @@ impl App {
         )
     }
 
-    /// Applies a click to the selection.
-    ///
-    /// Plain replaces, shift extends from the anchor, control toggles. The
-    /// anchor is where a range started rather than wherever the cursor has
-    /// reached, so extending twice grows one range instead of walking one.
+    /// Applies a click to the selection. The rules live in [`RowSelection`].
     fn select(&mut self, index: usize, modifiers: crate::keymap::Mods) {
-        if index >= self.rows.len() {
-            return;
-        }
-        self.cursor = Some(index);
-
-        if modifiers.shift {
-            let anchor = self.anchor.unwrap_or(index);
-            let (from, to) = if anchor <= index {
-                (anchor, index)
-            } else {
-                (index, anchor)
-            };
-            self.selected = (from..=to).collect();
-            return;
-        }
-
-        if modifiers.ctrl {
-            if !self.selected.remove(&index) {
-                self.selected.insert(index);
-            }
-            self.anchor = Some(index);
-            return;
-        }
-
-        self.selected = std::iter::once(index).collect();
-        self.anchor = Some(index);
+        self.selection_rows.click(index, modifiers, self.rows.len());
     }
 
     /// Moves the cursor, replacing or extending the selection.
     fn move_selection(&mut self, delta: isize, extend: bool) -> Task<Message> {
-        if self.rows.is_empty() {
-            return Task::none();
-        }
-        let last = self.rows.len().saturating_sub(1);
-        let next = match self.cursor {
-            None => {
-                if delta < 0 {
-                    last
-                } else {
-                    0
-                }
-            }
-            Some(current) => current.saturating_add_signed(delta).min(last),
-        };
-
-        self.select(
-            next,
-            crate::keymap::Mods {
-                shift: extend,
-                ctrl: false,
-                alt: false,
-            },
-        );
+        self.selection_rows.move_by(delta, extend, self.rows.len());
         self.scroll_to_cursor()
     }
 
+    /// The row the keyboard is on.
+    fn cursor(&self) -> Option<usize> {
+        self.selection_rows.cursor()
+    }
+
     fn play_from_cursor(&mut self) {
-        let Some(index) = self.cursor else { return };
+        let Some(index) = self.cursor() else { return };
         let Some(at) = self.rows.get(index).copied() else {
             return;
         };
@@ -1333,9 +1258,10 @@ impl App {
         // Several rows chosen means "play these", which is what a materialised
         // snapshot is for (§6.2): the chosen tracks *are* the play order, and
         // nothing re-derives them afterwards.
-        let spec = if self.selected.len() > 1 {
+        let spec = if self.selection_rows.len() > 1 {
             let tracks: Vec<_> = self
-                .selected
+                .selection_rows
+                .rows()
                 .iter()
                 .filter_map(|i| self.rows.get(*i).copied())
                 .collect();
@@ -1371,7 +1297,7 @@ impl App {
     /// alone would only change which rows get built -- the widget would stay
     /// where it was, and the two would disagree.
     fn scroll_to_cursor(&mut self) -> Task<Message> {
-        let Some(cursor) = self.cursor else {
+        let Some(cursor) = self.cursor() else {
             return Task::none();
         };
         let Some(line) = self.line_of_row(cursor) else {
@@ -1429,11 +1355,11 @@ impl App {
             // Resolved as the table draws, so a six-figure result costs a
             // few dozen lookups a frame rather than a hundred thousand.
             rows: Box::new(|index| self.rows.get(index).and_then(|id| self.track(*id))),
-            selected: &self.selected,
+            selected: self.selection_rows.rows(),
             playing: self.playing,
             playing_row: None,
             columns: &self.settings.columns,
-            sort: self.sort_override,
+            sort: self.sort_override.get(),
             resizing: self.resizing_column.is_some(),
             reordering: self.reordering,
             scroll_offset: self.scroll_offset,
@@ -1638,7 +1564,7 @@ impl App {
                 overlays::columns::ColumnsView {
                     layout: &self.settings.columns,
                     sort: self.settings.sort,
-                    overridden: self.sort_override.is_some(),
+                    overridden: self.sort_override.is_set(),
                     theme: &self.theme,
                 },
                 Message::Columns,

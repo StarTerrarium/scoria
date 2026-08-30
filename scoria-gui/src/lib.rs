@@ -13,6 +13,7 @@ pub mod keymap;
 pub mod layouts;
 pub mod overlays;
 pub mod picker;
+pub mod selection;
 pub mod settings;
 pub mod theme;
 pub mod widgets;
