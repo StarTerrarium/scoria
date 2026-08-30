@@ -509,6 +509,8 @@ Always visible, identical across all three layouts.
 
 Contents: a seek bar, then a row of artwork thumbnail, symbol-only transport controls, shuffle and repeat toggles, track title, `artist — album`, jump-to-playing, elapsed/total, volume.
 
+**The bar states its height; the artwork takes the rest of it.** It was the other way round -- the artwork was the tallest thing in the row, so it set the height and could not grow without taking the bar with it, and the padding above and below was room it was not allowed to use. Now one constant says how tall the bar is and the artwork is that minus a two-pixel inset, so the art is as large as the bar allows and making the bar taller enlarges the art with it. The compiler checks both, as `layouts` checks its own proportions.
+
 **The seek bar sits inline, between the two times.** An earlier version of this list omitted it entirely, which was an oversight rather than a decision: `Command::Seek` is in §3.2 and `AudioBackend::seek` is in §3.4, so seeking was implemented end to end with no way to ask for it.
 
 It was first placed full width above the controls, on the reasoning that inline placement would compress the part of the bar carrying information. That reasoning did not survive seeing it: the now-playing block is a title and one subtitle line, so filling the bar with it left a void in the middle and pushed the clock and volume to the far edge. The block now takes a fixed width and the seek bar takes the slack, which is the one control that benefits from every pixel it can get.

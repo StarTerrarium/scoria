@@ -50,11 +50,41 @@ const PIXELS_PER_NOTCH: f32 = 50.0;
 /// defaults that happen to match.
 const SLIDER_HEIGHT: f32 = 16.0;
 
+/// How tall the bar's content is.
+///
+/// Stated rather than emergent. It used to be whatever the tallest thing in
+/// the row happened to be -- the artwork -- which meant the artwork could not
+/// grow at all without taking the bar with it, and the six pixels of padding
+/// above and below were room it was not allowed to use.
+const BAR_HEIGHT: f32 = 52.0;
+
+/// What separates the artwork from the bar's edges.
+///
+/// One pixel of it is the button's own padding and one is what centring leaves,
+/// which is as little as the artwork can be given without it touching the rule
+/// along the top of the bar.
+const ARTWORK_INSET: f32 = 2.0;
+
 /// The side of the artwork slot.
 ///
-/// One number for the image and the frame around it, so the slot does not
-/// change size depending on whether there is anything in it.
-const ARTWORK: f32 = 38.0;
+/// As much of the bar as there is. One number for the image and the frame
+/// around it, so the slot does not change size depending on whether there is
+/// anything in it.
+const ARTWORK: f32 = BAR_HEIGHT - ARTWORK_INSET * 2.0;
+
+// The artwork was the tallest thing in the row, so it set the bar's height and
+// could not grow without taking the bar with it -- the padding above and below
+// was room it was not allowed to use. Checked by the compiler rather than in a
+// test, as `layouts` checks its own proportions: these are constants, and a
+// test could only ever agree with the compiler.
+const _: () = assert!(
+    ARTWORK + ARTWORK_INSET * 2.0 <= BAR_HEIGHT,
+    "the artwork does not fit the bar"
+);
+const _: () = assert!(
+    ARTWORK > BAR_HEIGHT * 0.8,
+    "the artwork is back to leaving most of the bar unused"
+);
 
 /// The volume after a scroll over the bar.
 ///
@@ -311,7 +341,10 @@ pub fn view<'a, Message: Clone + 'a>(
         .on_scroll(move |delta| on_event(Event::SetVolume(scrolled_volume(volume, delta)))),
     ]
     .spacing(8)
-    .padding([6, 10])
+    // No vertical padding: the height is set here rather than left to whatever
+    // the tallest child is, so the artwork can have the room instead.
+    .padding([0, 10])
+    .height(Length::Fixed(BAR_HEIGHT))
     .align_y(Alignment::Center);
 
     let style = theme.surface_style();
