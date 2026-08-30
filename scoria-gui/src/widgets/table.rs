@@ -482,7 +482,11 @@ fn track_row<'a, Message: Clone + 'a>(
         .align_y(Alignment::Center)
         .height(Length::Fixed(ROW_HEIGHT));
     for (index, setting) in visible.iter().enumerate() {
-        let value = setting.column.value(track);
+        // §11: colour alone cannot carry the now-playing row. The tint is
+        // deliberately quieter than selection, and a row that is both takes
+        // the selection's background -- so the playing row also carries a
+        // marker glyph where its track number would be.
+        let value = setting.column.value_for(track, state.playing);
 
         // §7.4: a missing file is struck through rather than removed, so what
         // will happen to it is stated rather than left to be discovered. The
