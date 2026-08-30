@@ -263,6 +263,13 @@ impl Theme {
         style
     }
 
+    /// How thick the seek and volume rails are drawn.
+    ///
+    /// One number because two things draw it: the slider itself, and the inert
+    /// strip that stands in for it when there is nothing to seek through. If
+    /// they disagree the bar changes shape the moment playback stops.
+    pub const RAIL_THICKNESS: f32 = 3.0;
+
     /// The volume slider (§8).
     #[must_use]
     pub fn slider_style(&self, status: slider::Status) -> slider::Style {
@@ -277,7 +284,7 @@ impl Theme {
                     Background::Color(colour(self.roles.accent)),
                     Background::Color(colour(self.roles.border)),
                 ),
-                width: 3.0,
+                width: Self::RAIL_THICKNESS,
                 border: Border {
                     radius: border::radius(2),
                     ..Border::default()
@@ -571,6 +578,44 @@ impl Theme {
             } else {
                 base
             }),
+        }
+    }
+}
+
+impl Theme {
+    /// The slot the artwork sits in.
+    ///
+    /// Drawn whether or not there is art in it, so the transport keeps its
+    /// shape and the empty state reads as a frame waiting for something
+    /// rather than as a gap where something failed.
+    #[must_use]
+    pub fn artwork_slot_style(&self) -> container::Style {
+        container::Style {
+            // Recessed: darker than the bar it sits in, so it reads as a place
+            // for something rather than as another panel on top of one.
+            background: Some(Background::Color(colour(self.roles.background))),
+            border: Border {
+                color: colour(self.roles.border),
+                width: 1.0,
+                radius: border::radius(3),
+            },
+            ..container::Style::default()
+        }
+    }
+
+    /// The seek bar with nothing to seek through.
+    ///
+    /// The colour the slider draws the unplayed part of its rail in, so the
+    /// idle bar is the bar, minus the handle.
+    #[must_use]
+    pub fn seek_rail_style(&self) -> container::Style {
+        container::Style {
+            background: Some(Background::Color(colour(self.roles.border))),
+            border: Border {
+                radius: border::radius(2),
+                ..Border::default()
+            },
+            ..container::Style::default()
         }
     }
 }

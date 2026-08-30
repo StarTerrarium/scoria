@@ -50,6 +50,12 @@ const PIXELS_PER_NOTCH: f32 = 50.0;
 /// defaults that happen to match.
 const SLIDER_HEIGHT: f32 = 16.0;
 
+/// The side of the artwork slot.
+///
+/// One number for the image and the frame around it, so the slot does not
+/// change size depending on whether there is anything in it.
+const ARTWORK: f32 = 38.0;
+
 /// The volume after a scroll over the bar.
 ///
 /// Up is louder, which is the only arrangement anyone expects.
@@ -127,33 +133,32 @@ pub fn view<'a, Message: Clone + 'a>(
 
     // The thumbnail. Artwork always follows what is playing (§9.1), so this
     // needs no mode and no toggle -- it shows whatever the transport shows.
+    //
+    // The slot is drawn either way. With nothing playing this used to be a
+    // music note floating in the corner of the bar with no edge to it, which
+    // read as a stray character rather than as a place art goes -- and it was
+    // the last symbol here still coming from whatever font had one.
+    let slot = theme.artwork_slot_style();
     let thumbnail: Element<'a, Message, Theme> = match transport.artwork.clone() {
         Some(path) => iced::widget::image(path)
-            .width(Length::Fixed(38.0))
-            .height(Length::Fixed(38.0))
+            .width(Length::Fixed(ARTWORK))
+            .height(Length::Fixed(ARTWORK))
             .content_fit(iced::ContentFit::Cover)
             .into(),
-        None => text("♪").size(20).into(),
+        None => icon::view(Icon::Note, false),
     };
     let artwork = button(
         container(thumbnail)
-            .width(Length::Fixed(40.0))
-            .height(Length::Fixed(40.0))
+            .width(Length::Fixed(ARTWORK))
+            .height(Length::Fixed(ARTWORK))
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
-            .clip(true),
+            .clip(true)
+            .style(move |_t: &Theme| slot),
     )
     .padding(1)
     .on_press(on_event(Event::ShowArtwork))
     .style(|t: &Theme, status| t.transport_button(status, false));
-
-    let title = transport
-        .track
-        .map_or_else(|| "Nothing playing".to_owned(), |t| t.title.clone());
-    let subtitle = transport.track.map_or_else(String::new, |t| {
-        // §8: `artist — album`. The display artist, with its full credits.
-        format!("{} — {}", t.artist, t.album)
-    });
 
     let muted = theme.text_style(theme.muted_colour());
 
@@ -169,13 +174,30 @@ pub fn view<'a, Message: Clone + 'a>(
     // bar left a void in the middle and pushed the clock and volume to the far
     // edge. Fixed width keeps them where the eye expects and hands the slack to
     // the seek bar, which is the one control that benefits from every pixel.
-    let now_playing = container(
-        column![
-            text(title).size(14),
-            text(subtitle).size(12).style(move |_t: &Theme| muted),
-        ]
-        .spacing(1),
-    )
+    //
+    // With nothing playing it is one line, not a title over an empty second
+    // one. The row centres what it is given, so a block of one line centres
+    // itself; a block of two with the bottom one blank sat high and looked
+    // like the subtitle had failed to load.
+    let now_playing = container(match transport.track {
+        Some(track) => Element::from(
+            column![
+                text(track.title.clone()).size(14),
+                // §8: `artist — album`. The display artist, with full credits.
+                text(format!("{} — {}", track.artist, track.album))
+                    .size(12)
+                    .style(move |_t: &Theme| muted),
+            ]
+            .spacing(1),
+        ),
+        // Muted: it is the absence of information rather than information,
+        // and at full strength it was the brightest thing in an idle bar.
+        None => Element::from(
+            text("Nothing playing")
+                .size(14)
+                .style(move |_t: &Theme| muted),
+        ),
+    })
     .width(Length::Fixed(300.0))
     .clip(true);
 
@@ -198,10 +220,23 @@ pub fn view<'a, Message: Clone + 'a>(
         .width(Fill)
         .into()
     } else {
-        Space::new()
-            .height(Length::Fixed(SLIDER_HEIGHT))
-            .width(Fill)
-            .into()
+        // §8 has always called for an inert strip here, and there was none:
+        // an empty Space left a gap where the bar belongs, so an idle
+        // transport looked unfinished rather than idle. The rail without a
+        // handle says there is a bar, and nothing to move along it.
+        let rail = theme.seek_rail_style();
+        container(
+            container(
+                Space::new()
+                    .width(Fill)
+                    .height(Length::Fixed(Theme::RAIL_THICKNESS)),
+            )
+            .style(move |_t: &Theme| rail),
+        )
+        .width(Fill)
+        .height(Length::Fixed(SLIDER_HEIGHT))
+        .align_y(Alignment::Center)
+        .into()
     };
 
     let time = move |value: String| {

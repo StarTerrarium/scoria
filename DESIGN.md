@@ -521,6 +521,8 @@ While it is being dragged, the bar and the elapsed time both show where the poin
 
 The seek bar and the volume bar share that height. They are the same control drawn at two widths, so a hand that has learned one has learned the other; leaving them to two defaults that happened to agree would let them drift apart without anyone deciding to.
 
+**The bar with nothing playing is a state, not an absence.** The artwork slot is drawn either way, so it reads as a frame waiting for something rather than as a gap where something failed -- and with nothing in it, it holds a drawn note rather than the one remaining U+266A. "Nothing playing" is one muted line, centred, instead of a title sitting above an empty subtitle, which looked like the second line had failed to load. The seek bar shows its rail with no handle on it: §8 has always called for an inert strip there, and for a long time the code drew an empty `Space`, so the middle of an idle transport was a void between two clocks.
+
 Position is reported whenever it moves, not once per second. A seek bar moves continuously, and a report per second makes the handle lurch a second's width at a time -- very visible on a short track. The elapsed text still renders whole seconds, so it is unaffected. A track of unknown length gets an inert strip rather than a movable handle, because a control that moves without doing anything is worse than one that does not move.
 
 Shuffle and repeat sit past the seek bar rather than among the transport buttons: they change what happens next, which is a different kind of thing from moving through what is playing now.

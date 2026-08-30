@@ -44,12 +44,16 @@ pub enum Icon {
     RepeatOne,
     JumpToPlaying,
     Queue,
+    /// The mark in the artwork slot before there is any artwork. Drawn like
+    /// the rest, so the empty state does not reach for a font either -- it was
+    /// the last U+266A in the bar.
+    Note,
 }
 
 impl Icon {
     /// Every icon, so the set can be checked for gaps.
     #[must_use]
-    pub const fn all() -> [Self; 9] {
+    pub const fn all() -> [Self; 10] {
         [
             Self::Previous,
             Self::Play,
@@ -60,6 +64,7 @@ impl Icon {
             Self::RepeatOne,
             Self::JumpToPlaying,
             Self::Queue,
+            Self::Note,
         ]
     }
 
@@ -68,9 +73,12 @@ impl Icon {
     pub const fn emphasis(self) -> Emphasis {
         match self {
             Self::Previous | Self::Play | Self::Pause | Self::Next => Emphasis::Primary,
-            Self::Shuffle | Self::Repeat | Self::RepeatOne | Self::JumpToPlaying | Self::Queue => {
-                Emphasis::Secondary
-            }
+            Self::Shuffle
+            | Self::Repeat
+            | Self::RepeatOne
+            | Self::JumpToPlaying
+            | Self::Queue
+            | Self::Note => Emphasis::Secondary,
         }
     }
 
@@ -277,6 +285,12 @@ fn draw(icon: Icon, frame: &mut Frame, origin: Point, glyph: f32, pen: IconPen) 
             line(frame, (0.5, 0.86), (0.5, 1.0));
             line(frame, (0.0, 0.5), (0.14, 0.5));
             line(frame, (0.86, 0.5), (1.0, 0.5));
+        }
+        // A note, for the artwork slot with nothing in it.
+        Icon::Note => {
+            frame.fill(&Path::circle(at(0.3, 0.76), glyph * 0.22), pen.fill());
+            bar(frame, 0.48, 0.06, 0.78, 1.2);
+            line(frame, (0.52, 0.1), (0.9, 0.26));
         }
         // Three lines: a list of what is coming.
         Icon::Queue => {
