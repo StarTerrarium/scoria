@@ -7,7 +7,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
+  # Deliberately no `RUSTFLAGS: -D warnings` here: it applies to every
+  # dependency as well as to us, so a warning introduced by a new release of
+  # iced or symphonia would fail this build for a reason nobody here can fix.
+  # The clippy step denies warnings for our own crates, which is the part we
+  # control and the part worth gating on.
 
 jobs:
   check:
@@ -16,11 +20,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # iced needs a windowing/graphics stack; rodio needs ALSA headers.
+      # Every -sys crate here probes pkg-config from a build script, so a missing
+      # header fails the build outright rather than at link time. Verified
+      # against the dependency graph:
+      #   alsa-sys     probes "alsa"           -> libasound2-dev  (rodio)
+      #   libdbus-sys  probes "dbus-1"         -> libdbus-1-dev   (souvlaki, §12)
+      #   wayland-sys  probes "wayland-client" -> libwayland-dev  (rfd, through
+      #     the client_system feature: it links rather than dlopens, and the
+      #     probe is an .unwrap())
+      # libxkbcommon-dev is not proven necessary; it is winit's usual companion
+      # and costs a second. This list is why the first run of this workflow
+      # failed -- it had never run before, because there was no remote.
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev
+          sudo apt-get install -y pkg-config libasound2-dev libdbus-1-dev \
+            libwayland-dev libxkbcommon-dev libudev-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -49,7 +64,8 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev
+          sudo apt-get install -y pkg-config libasound2-dev libdbus-1-dev \
+            libwayland-dev libxkbcommon-dev libudev-dev
       # Kept in step with rust-version in the workspace manifest.
       - uses: dtolnay/rust-toolchain@1.89.0
       - uses: Swatinem/rust-cache@v2
