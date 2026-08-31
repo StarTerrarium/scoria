@@ -339,7 +339,10 @@ pub fn view<'a, Message: Clone + 'a>(
             slider(0.0..=1.0, transport.volume, move |v| on_event(
                 Event::SetVolume(v)
             ))
-            .step(0.01)
+            // Typed: the literal's inferred type is `f32` only by a fallback
+            // that Rust is phasing out (rust#154024), and the workspace denies
+            // future-incompatibility warnings.
+            .step(0.01_f32)
             .height(SLIDER_HEIGHT)
             .width(Length::Fixed(90.0)),
         )
