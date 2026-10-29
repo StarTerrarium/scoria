@@ -87,6 +87,37 @@ else
   pass "no raw SQL outside db/"
 fi
 
+# DESIGN.md 6.7: exactly one module writes to the library. Every other line of
+# Scoria reads the files; the carefully tagged library is the source of truth
+# (DESIGN.md 13), and the way to keep it safe is one place that can change it.
+#
+# These are lofty's write and strip calls -- how a tag change would arrive,
+# since nobody rewrites a FLAC by hand. Tests are cut first: they build their
+# fixtures with the same calls.
+THE_WRITER='scoria-core/src/library/gain/write.rs'
+writers=$(
+  find scoria-*/src -name '*.rs' ! -path "$THE_WRITER" 2>/dev/null | sort | while read -r f; do
+    if sed '/^#\[cfg(test)\]/,$d' "$f" \
+      | grep -qE '\b(save_to|save_to_path|remove_from|remove_from_path)\('; then
+      echo "$f"
+    fi
+  done
+)
+if [ ! -f "$THE_WRITER" ]; then
+  fail "the library writer is missing: $THE_WRITER"
+  echo "     This check names it; if it moved, move the check with it."
+elif ! grep -qE '\bsave_to_path\(' "$THE_WRITER"; then
+  # A check whose pattern no longer matches the one legitimate writer would
+  # pass forever while a rival appeared under a different call.
+  fail "$THE_WRITER no longer writes with the calls this check looks for"
+elif [ -n "$writers" ]; then
+  fail "something other than $THE_WRITER writes tags:"
+  echo "$writers" | sed 's/^/       /'
+  echo "     DESIGN.md 6.7. Only the gain writer changes the library."
+else
+  pass "only the gain writer changes the library"
+fi
+
 # Panic policy: the workspace denies the constructs that can panic at runtime, but
 # a local `allow` silently reopens the hole. Test modules are legitimately allowed
 # to unwrap; production code is not. Test modules are conventionally last in the

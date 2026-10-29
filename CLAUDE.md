@@ -156,7 +156,8 @@ scoria-tui/ arrives post-1.0. It is deliberately not an empty crate until then.
 
 `./scripts/check-boundaries.sh` checks the invariants above that the compiler
 cannot express: core's dependency graph is free of UI crates, there is only one
-track table, iced `Color` never leaves `theme/`, raw SQL never leaves `db/`, no
+track table, iced `Color` never leaves `theme/`, raw SQL never leaves `db/`,
+nothing but `library/gain/write.rs` writes to a file in the library, no
 panic lint has been `allow`ed outside a test module, every `Column` is offered
 in the panel that turns it on, nothing in the dependency graph can reach the
 internet, no `pub fn` under `widgets/` is left without a caller, every
@@ -170,6 +171,11 @@ the table never called it. Then four `Command` variants shipped that no
 frontend sent -- and unlike the marker, each was a trap for whoever sent one
 first (`DESIGN.md` §3.2). Unit tests do not catch either, because they call the
 thing directly, which is the seam that broke.
+
+The single-writer check exists because the library is the source of truth
+and Scoria changes it in exactly one way: the four ReplayGain tags, when asked
+(`DESIGN.md` §6.7). Anything else that wants to write to a music file is a new
+decision, not a new call site.
 
 The desktop-identity check is there because a half-finished rename builds
 cleanly, passes every test, and shows the compositor's placeholder icon.
