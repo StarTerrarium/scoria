@@ -38,7 +38,26 @@ pub struct SettingsView<'a> {
     /// nothing else in the application would ever say why.
     pub gain_tagged: usize,
     pub track_count: usize,
+    pub missing: Missing,
     pub theme: &'a Theme,
+}
+
+/// What can be done about tracks whose files are gone (§7.4, "Forgetting").
+///
+/// Each variant carries the count, because every one of them says it: the
+/// number is what someone is deciding about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Missing {
+    /// Nothing is missing, so there is no row at all.
+    None,
+    Ready(usize),
+    /// Asked once; waiting to be asked again, or told no.
+    Armed(usize),
+    /// A scan is running, and forgetting now would race it.
+    Scanning(usize),
+    /// The library root is not on disk, so every track reads as missing and
+    /// forgetting them would empty a library that is only unplugged.
+    Unreachable(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +67,10 @@ pub enum Event {
     SetPlayBehaviour(PlayBehaviour),
     ChooseTheme(String),
     Rescan,
+    /// Arm the Missing row. Nothing is removed yet.
+    ForgetMissing,
+    ConfirmForget,
+    CancelForget,
 }
 
 #[must_use]
@@ -80,6 +103,56 @@ pub fn view<'a, Message: Clone + 'a>(
         theme,
         on_event(Event::Rescan),
     ));
+
+    // §7.4: present only while something is missing, so a library with
+    // nothing to forget has a settings screen that never mentions it.
+    let gone = |n: usize| {
+        if n == 1 {
+            "1 file is gone".to_owned()
+        } else {
+            format!("{n} files are gone")
+        }
+    };
+    match settings.missing {
+        Missing::None => {}
+        Missing::Ready(n) => {
+            body = body.push(action_row(
+                "Missing",
+                gone(n),
+                "Forget…",
+                theme,
+                on_event(Event::ForgetMissing),
+            ));
+        }
+        Missing::Armed(n) => {
+            let tracks = if n == 1 {
+                "1 track".to_owned()
+            } else {
+                format!("{n} tracks")
+            };
+            body = body.push(confirm_row(
+                "Missing",
+                format!("Forget {tracks}? Their play counts go too."),
+                theme,
+                on_event(Event::ConfirmForget),
+                on_event(Event::CancelForget),
+            ));
+        }
+        Missing::Scanning(n) => {
+            body = body.push(value_row(
+                "Missing",
+                format!("{} · available when the scan finishes", gone(n)),
+                theme,
+            ));
+        }
+        Missing::Unreachable(n) => {
+            body = body.push(value_row(
+                "Missing",
+                format!("{} · the library folder isn't reachable", gone(n)),
+                theme,
+            ));
+        }
+    }
 
     // §6.7: the feature is only as good as the library's tag coverage, and a
     // partly tagged library sounds uneven for a reason nothing else explains.
@@ -208,6 +281,65 @@ fn action_row<'a, Message: Clone + 'a>(
             iced::widget::button(text(action).size(12))
                 .padding([2, 10])
                 .on_press(message)
+                .style(|t: &Theme, status| t.chip_button(status)),
+        ]
+        .spacing(8)
+        .padding([0, 8])
+        .align_y(Alignment::Center)
+        .height(Length::Fixed(28.0)),
+    )
+    .width(Fill)
+    .into()
+}
+
+/// A labelled value and nothing to press: the Missing row when pressing would
+/// be wrong, which it says in words rather than by greying a button out.
+fn value_row<'a, Message: Clone + 'a>(
+    label: &'static str,
+    value: String,
+    theme: &Theme,
+) -> Element<'a, Message, Theme> {
+    let muted = theme.text_style(theme.muted_colour());
+    container(
+        row![
+            container(text(label).size(12).style(move |_t: &Theme| muted))
+                .width(Length::Fixed(120.0)),
+            container(text(value).size(13)).width(Fill).clip(true),
+        ]
+        .spacing(8)
+        .padding([0, 8])
+        .align_y(Alignment::Center)
+        .height(Length::Fixed(28.0)),
+    )
+    .width(Fill)
+    .into()
+}
+
+/// An [`action_row`] that has been pressed once and wants to be sure.
+///
+/// The same height in the same place, so nothing moves under the pointer
+/// between the first press and the second -- which is also why the confirming
+/// button sits where the first one was.
+fn confirm_row<'a, Message: Clone + 'a>(
+    label: &'static str,
+    question: String,
+    theme: &Theme,
+    confirm: Message,
+    cancel: Message,
+) -> Element<'a, Message, Theme> {
+    let muted = theme.text_style(theme.muted_colour());
+    container(
+        row![
+            container(text(label).size(12).style(move |_t: &Theme| muted))
+                .width(Length::Fixed(120.0)),
+            container(text(question).size(13)).width(Fill).clip(true),
+            iced::widget::button(text("Forget").size(12))
+                .padding([2, 10])
+                .on_press(confirm)
+                .style(|t: &Theme, status| t.danger_button(status)),
+            iced::widget::button(text("Cancel").size(12))
+                .padding([2, 10])
+                .on_press(cancel)
                 .style(|t: &Theme, status| t.chip_button(status)),
         ]
         .spacing(8)

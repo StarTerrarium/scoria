@@ -166,6 +166,15 @@ pub struct App {
     /// difference between "this is taking a while" and "this found nothing",
     /// and the two need different words.
     scanning: Option<welcome::Scan>,
+    /// The settings drawer's Missing row has been pressed once and is asking
+    /// to be sure (§7.4). Anything else that happens disarms it.
+    forget_armed: bool,
+    /// Whether the library root was on disk when last looked at.
+    ///
+    /// Cached rather than asked in the view, which runs every frame and should
+    /// not be touching the filesystem. Looked at again whenever the answer
+    /// could matter: the drawer opening, the library changing, a press.
+    root_reachable: bool,
 
     /// Which overlay is open. One `Option`, so §9's "one at a time, never
     /// stacked" cannot be expressed otherwise.
@@ -266,6 +275,8 @@ impl App {
             viewport_height: 650.0,
             status,
             scanning: None,
+            forget_armed: false,
+            root_reachable: true,
             overlay: None,
             dragging_drawer: false,
             queue: None,
@@ -474,6 +485,9 @@ impl App {
                     library_changed = Some(delta);
                 }
                 CoreEvent::ScanProgress { seen, total } => {
+                    // Forgetting mid-scan would race the scan's own idea of
+                    // what is missing, so an armed row stands down.
+                    self.forget_armed = false;
                     self.scanning = Some(welcome::Scan { seen, total });
                     self.status = match total {
                         Some(total) => format!("scanning {seen}/{total}"),
@@ -515,17 +529,81 @@ impl App {
         // have some now.
         self.artwork = None;
 
-        let anchored = self
-            .cursor()
-            .and_then(|index| self.rows.get(index).copied());
+        let cursor = self.cursor();
+        let anchored = cursor.and_then(|index| self.rows.get(index).copied());
         self.refresh();
-        if let Some(track) = anchored
-            && let Some(index) = self.rows.iter().position(|id| *id == track)
+
+        // Forgetting can leave a pane filter naming an artist or album that no
+        // longer exists, and an empty table under a chip for something gone
+        // reads as a fault. Only for forgetting: a search that matches nothing
+        // is an answer, and so is a filter after any other change.
+        if matches!(delta, scoria_core::event::LibraryDelta::TracksRemoved(_))
+            && self.rows.is_empty()
         {
+            self.clear_filters();
+        }
+
+        let survived = anchored.and_then(|track| self.rows.iter().position(|id| *id == track));
+        if let Some(index) = refocus(survived, cursor, self.rows.len()) {
             self.selection_rows.focus(index, self.rows.len());
         }
 
+        self.forget_armed = false;
+        self.refresh_reachability();
         self.status = describe(delta, self.rows.len());
+    }
+
+    /// What the settings drawer's Missing row should offer (§7.4).
+    fn missing(&self) -> overlays::settings::Missing {
+        let count = self.session.as_ref().map_or(0, |session| {
+            session
+                .index()
+                .tracks()
+                .iter()
+                .filter(|t| !t.available)
+                .count()
+        });
+        missing_state(
+            count,
+            self.root_reachable,
+            self.scanning.is_some(),
+            self.forget_armed,
+        )
+    }
+
+    fn refresh_reachability(&mut self) {
+        self.root_reachable = self
+            .session
+            .as_ref()
+            .is_some_and(Session::library_root_reachable);
+    }
+
+    /// Arms the Missing row, if pressing it would be right.
+    fn arm_forget(&mut self) {
+        self.refresh_reachability();
+        self.forget_armed = matches!(self.missing(), overlays::settings::Missing::Ready(_));
+    }
+
+    /// The second press (§7.4). Re-checks everything the first press did,
+    /// because a scan can have started in between.
+    fn forget_missing(&mut self) {
+        let armed = std::mem::take(&mut self.forget_armed);
+        self.refresh_reachability();
+        if !armed || self.scanning.is_some() {
+            return;
+        }
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        // On success the status comes from the TracksRemoved this emits, by
+        // way of `on_library_changed`, so it is said in one place.
+        match session.forget_unavailable() {
+            Ok(forgotten) if forgotten.tracks == 0 => {
+                "No missing tracks.".clone_into(&mut self.status);
+            }
+            Ok(_) => {}
+            Err(e) => self.status = format!("Could not forget missing tracks: {e}"),
+        }
     }
 
     fn on_table(&mut self, event: table::Event) {
@@ -655,6 +733,9 @@ impl App {
                 self.persist();
             }
             E::Rescan => self.rescan(),
+            E::ForgetMissing => self.arm_forget(),
+            E::ConfirmForget => self.forget_missing(),
+            E::CancelForget => self.forget_armed = false,
         }
         Task::none()
     }
@@ -843,6 +924,14 @@ impl App {
                 self.selection.albums = vec![album];
                 self.reset_view();
             }
+            // §7.4: one confirmation, and it lives in the drawer. Opened
+            // rather than toggled, so a drawer already open stays open; armed
+            // only if forgetting would be right, and otherwise the row says
+            // why not.
+            menu::TrackAction::ForgetMissing => {
+                self.set_overlay(Some(Overlay::Settings));
+                self.arm_forget();
+            }
         }
         Task::none()
     }
@@ -1001,6 +1090,11 @@ impl App {
     /// overlay appearing fully formed, because only the first reset the clock,
     /// is exactly the "did anything happen?" problem this exists to solve.
     fn set_overlay(&mut self, requested: Option<Overlay>) {
+        if requested != Some(Overlay::Settings) {
+            self.forget_armed = false;
+        } else {
+            self.refresh_reachability();
+        }
         let now = std::time::Instant::now();
         match (requested, self.overlay) {
             // Dismissed: retract rather than vanish.
@@ -1265,6 +1359,12 @@ impl App {
                 // The menu goes first, and on its own: it is the most recent
                 // thing to have opened, so it is what Escape is reaching for.
                 if self.menu.take().is_some() {
+                    return Task::none();
+                }
+                // Likewise an armed Missing row: the question is the most
+                // recent thing on screen, so Escape answers it before it
+                // closes the drawer it is asked in.
+                if std::mem::take(&mut self.forget_armed) {
                     return Task::none();
                 }
                 if self.open_overlay_kind().is_none() {
@@ -1695,6 +1795,7 @@ impl App {
                     artwork_cache: self.paths.artwork_cache(),
                     gain_tagged: self.gain_tagged(),
                     track_count: self.session.as_ref().map_or(0, |s| s.index().len()),
+                    missing: self.missing(),
                     theme: &self.theme,
                 },
                 Message::Settings,
@@ -2006,12 +2107,51 @@ const fn next_repeat(current: RepeatMode) -> RepeatMode {
 }
 
 /// A one-line summary of what a scan changed, for the status bar.
+/// Where the cursor goes after the library changes under it.
+///
+/// On the same track if it survived. If it did not -- forgotten, in practice --
+/// on the row that slid into its place, which is the nearest one; the top of
+/// the library is not.
+fn refocus(survived: Option<usize>, cursor: Option<usize>, len: usize) -> Option<usize> {
+    survived.or_else(|| Some(cursor?.min(len.checked_sub(1)?)))
+}
+
+/// The Missing row's state (§7.4).
+///
+/// The order is the order of what makes forgetting wrong: nothing to forget,
+/// then a library that is not there, then a scan in flight. Only past all
+/// three does a press arm it.
+fn missing_state(
+    count: usize,
+    reachable: bool,
+    scanning: bool,
+    armed: bool,
+) -> overlays::settings::Missing {
+    use overlays::settings::Missing;
+    if count == 0 {
+        Missing::None
+    } else if !reachable {
+        Missing::Unreachable(count)
+    } else if scanning {
+        Missing::Scanning(count)
+    } else if armed {
+        Missing::Armed(count)
+    } else {
+        Missing::Ready(count)
+    }
+}
+
 fn describe(delta: &scoria_core::event::LibraryDelta, showing: usize) -> String {
     use scoria_core::event::LibraryDelta as D;
     match delta {
         D::TracksAdded(ids) => format!("{} track(s) added -- showing {showing}", ids.len()),
         D::TracksChanged(ids) => format!("{} track(s) retagged", ids.len()),
-        D::TracksRemoved(ids) => format!("{} track(s) removed -- showing {showing}", ids.len()),
+        // Only forgetting emits this (§7.4). The second sentence is the undo,
+        // and the reason a confirmation was enough without a recycle bin.
+        D::TracksRemoved(ids) => format!(
+            "Forgot {} missing track(s). A rescan finds them again if the files come back.",
+            ids.len()
+        ),
         // §7.4: files that vanish are struck through, not dropped, so this is a
         // change in how rows look rather than in how many there are.
         D::AvailabilityChanged(ids) => format!("{} track(s) went missing or came back", ids.len()),
@@ -2098,6 +2238,97 @@ mod tests {
             Some(TrackId(22)),
             "a right-click did not open the menu on the row it was on"
         );
+    }
+
+    // ------------------------------------------------------------ forgetting --
+
+    #[test]
+    fn nothing_to_forget_means_no_row_whatever_else_is_true() {
+        use overlays::settings::Missing;
+        for reachable in [true, false] {
+            for scanning in [true, false] {
+                for armed in [true, false] {
+                    assert_eq!(missing_state(0, reachable, scanning, armed), Missing::None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_unreachable_library_is_never_offered_for_forgetting() {
+        // §7.4's guard: an unplugged drive makes every track read as missing.
+        use overlays::settings::Missing;
+        for scanning in [true, false] {
+            for armed in [true, false] {
+                assert_eq!(
+                    missing_state(5, false, scanning, armed),
+                    Missing::Unreachable(5)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_scan_in_flight_outranks_an_armed_row() {
+        use overlays::settings::Missing;
+        assert_eq!(missing_state(5, true, true, true), Missing::Scanning(5));
+        assert_eq!(missing_state(5, true, false, true), Missing::Armed(5));
+        assert_eq!(missing_state(5, true, false, false), Missing::Ready(5));
+    }
+
+    #[test]
+    fn escape_answers_the_question_before_it_closes_the_drawer() {
+        let mut app = App::disconnected(String::new());
+        app.set_overlay(Some(Overlay::Settings));
+        app.forget_armed = true;
+
+        let _ = app.on_action(Action::Dismiss);
+        assert!(!app.forget_armed, "escape did not disarm");
+        assert_eq!(
+            app.open_overlay_kind(),
+            Some(Overlay::Settings),
+            "escape closed the drawer instead of answering the question in it"
+        );
+
+        let _ = app.on_action(Action::Dismiss);
+        assert_eq!(app.open_overlay_kind(), None);
+    }
+
+    #[test]
+    fn leaving_the_settings_drawer_disarms() {
+        let mut app = App::disconnected(String::new());
+        app.set_overlay(Some(Overlay::Settings));
+        app.forget_armed = true;
+        app.set_overlay(Some(Overlay::Help));
+        assert!(!app.forget_armed);
+
+        app.set_overlay(Some(Overlay::Settings));
+        app.forget_armed = true;
+        app.set_overlay(None);
+        assert!(!app.forget_armed);
+    }
+
+    #[test]
+    fn confirming_without_having_armed_forgets_nothing() {
+        // A stale ConfirmForget -- a double click landing after the row
+        // re-rendered -- must not act on a question nobody is being asked.
+        let mut app = App::disconnected(String::new());
+        app.forget_missing();
+        assert!(!app.forget_armed);
+    }
+
+    #[test]
+    fn the_cursor_stays_on_a_track_that_survived() {
+        assert_eq!(refocus(Some(3), Some(9), 20), Some(3));
+    }
+
+    #[test]
+    fn the_cursor_on_a_forgotten_track_lands_on_its_neighbour_not_the_top() {
+        assert_eq!(refocus(None, Some(9), 20), Some(9));
+        // It was near the end, and the end moved up past it.
+        assert_eq!(refocus(None, Some(9), 4), Some(3));
+        assert_eq!(refocus(None, Some(9), 0), None, "nothing left to land on");
+        assert_eq!(refocus(None, None, 20), None, "there was no cursor");
     }
 
     #[test]

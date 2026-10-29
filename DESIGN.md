@@ -657,6 +657,8 @@ That leaves the ones with no natural place, which is what this drawer is for:
 
 It also shows two things that are not settings but have no other home: where the settings file, database and artwork cache live, and what fraction of the library carries ReplayGain tags. The second matters because §6.7 is only as good as the tagging, and a partly tagged library sounds uneven for a reason nothing else in the application would ever explain.
 
+While any track is missing, the library section also has a **Missing** row with the count and a **Forget…** button (§7.4). It is an action, not a setting, and it is here because library upkeep already is: the Rescan button sits on the row above it. When nothing is missing the row is not drawn at all. Pressing the button arms the row in place, without a dialog: it changes to "Forget N tracks? Their play counts go too." with **Forget** and **Cancel**, at the same height and in the same position, so nothing moves under the pointer between the two presses. Escape, Cancel, leaving the drawer, a scan starting, or the library changing all disarm it. While a scan is running, or while the library root is not reachable, the row says so in words and has no button. Greying out a button would show that it is unavailable without saying why.
+
 Choosing the library root uses the desktop's own folder picker, and points the watcher at the new root rather than scanning inline -- the catch-up scan every watch performs on start does the work, on the scan thread, where nobody waits for it.
 
 Post-1.0 additions land here too: a ReplayGain toggle (§6.7), and whatever tag editing needs that the properties dialog does not own.
@@ -678,6 +680,8 @@ A right-click on a track opens a small menu at the pointer, and the header's ove
 It exists because the mouse had no way to reach §9.3's metadata -- `Ctrl+I` was the only path -- and because two things that were built could not be reached at all: playing just an album (§6.4), and playing a single track. Every item is something the application could already do. The menu is the door, not the feature.
 
 **It is not one of the overlays above.** Those are a family: drawers that rise from the bottom, animate, resize by dragging, and never cover the transport, with one `Option` holding the open one. A menu at the pointer shares none of that, and folding it into the same enum would mean the rules stated for the family stopped describing it. It shares the one rule that matters -- Escape closes it, and closes it before it closes anything else, because it is the most recent thing to have opened.
+
+On a struck-through track the menu ends with **Forget missing tracks…** (§7.4). It is absent on a track that is present, because nobody who is not looking at the problem needs to read about it. The ellipsis means it asks before acting. It opens the settings drawer with the Missing row already armed (§9.4) rather than confirming inside the menu, so there is one confirmation in the application and not two.
 
 Showing the album art is one item rather than the whole gesture. Invariant 6 makes that the single exception to artwork following what is playing, so it survives the rearrangement rather than being replaced by it.
 

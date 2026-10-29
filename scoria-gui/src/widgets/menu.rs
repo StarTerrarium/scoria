@@ -60,6 +60,10 @@ pub enum TrackAction {
     Properties,
     FilterArtist,
     FilterAlbum,
+    /// §7.4's forgetting. Offered only on a missing track, where someone
+    /// looking at a struck-through row is already looking at the problem.
+    /// The ellipsis is the promise that it asks before acting.
+    ForgetMissing,
 }
 
 /// What the header's overflow menu can ask for.
@@ -99,7 +103,7 @@ pub fn track_items(track: &Track, keymap: &Keymap) -> Vec<Item<TrackAction>> {
             .map(|binding| binding.label())
     };
 
-    vec![
+    let mut items = vec![
         Item {
             event: TrackAction::PlayAlbum,
             label: "Play album".to_owned(),
@@ -132,7 +136,19 @@ pub fn track_items(track: &Track, keymap: &Keymap) -> Vec<Item<TrackAction>> {
             accelerator: None,
             separated: false,
         },
-    ]
+    ];
+
+    // Absent rather than disabled on a track that is present: nobody who is
+    // not looking at the problem needs to read about it.
+    if !track.available {
+        items.push(Item {
+            event: TrackAction::ForgetMissing,
+            label: "Forget missing tracks…".to_owned(),
+            accelerator: None,
+            separated: true,
+        });
+    }
+    items
 }
 
 /// What the header's overflow menu offers.
@@ -329,6 +345,27 @@ mod tests {
                 TrackAction::FilterArtist,
                 TrackAction::FilterAlbum,
             ]
+        );
+    }
+
+    #[test]
+    fn only_a_missing_track_offers_to_forget() {
+        let offers = |track: &Track| {
+            track_items(track, &Keymap::standard())
+                .iter()
+                .any(|item| item.event == TrackAction::ForgetMissing)
+        };
+        assert!(!offers(&track()));
+
+        let missing = Track {
+            available: false,
+            ..track()
+        };
+        assert!(offers(&missing));
+        let last = track_items(&missing, &Keymap::standard()).pop();
+        assert!(
+            last.is_some_and(|item| item.event == TrackAction::ForgetMissing && item.separated),
+            "it comes last, set apart from what the menu always offers"
         );
     }
 

@@ -415,6 +415,27 @@ impl Theme {
         }
     }
 
+    /// A button that removes something: [`Self::chip_button`]'s shape in the
+    /// danger role, so it reads as the same kind of control with a different
+    /// consequence.
+    #[must_use]
+    pub fn danger_button(&self, status: button::Status) -> button::Style {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let tint = if hovered { 0.35 } else { 0.22 };
+        button::Style {
+            background: Some(Background::Color(colour(
+                self.roles.background.mix(self.roles.danger, tint),
+            ))),
+            text_color: colour(self.roles.text),
+            border: Border {
+                color: colour(self.roles.danger),
+                width: 1.0,
+                radius: border::radius(3),
+            },
+            ..button::Style::default()
+        }
+    }
+
     #[must_use]
     pub fn rule_style(&self) -> rule::Style {
         rule::Style {
