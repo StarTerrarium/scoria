@@ -18,6 +18,9 @@ use crate::error::CoreError;
 use crate::event::{Event, LibraryDelta, PlaybackState};
 use crate::id::{AlbumId, TrackId};
 use crate::library::artwork::ArtworkKey;
+use crate::library::gain::job::{self as gain_job, Shared as GainShared};
+use crate::library::gain::write::GainTags;
+use crate::library::gain::{GainPlan, plan as gain_plan};
 use crate::library::scanner::{ScanOutcome, ScanProgress, Scanner};
 use crate::library::{ArtworkCache, LibraryWatcher};
 use crate::media_controls::MediaBridge;
@@ -28,10 +31,11 @@ use crate::playback::source::{Origin, PlaybackSource};
 use crate::query::index::LibraryIndex;
 use crate::query::sort::SortChain;
 use crate::query::{QueryEngine, QueryOutcome, Selection};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -67,6 +71,42 @@ pub struct Session {
     /// Whether the track now playing has already been counted (§6.8). Cleared
     /// by every `TrackChanged`, so repeat-one counts each time round.
     counted_this_play: bool,
+
+    /// A loudness analysis in progress (§6.7).
+    gain: Option<GainHandle>,
+    /// Tells the watch thread to keep scan requests pending rather than act on
+    /// them, while an analysis is writing to the library. A scan reading a
+    /// file mid-write would record whatever half of it it saw.
+    scan_hold: Arc<AtomicBool>,
+    /// Set by the watch thread while it is scanning, so an analysis can wait
+    /// for a scan already in flight before it writes anything.
+    scan_running: Arc<AtomicBool>,
+    /// The files playback has open -- the current track and the one preloaded
+    /// after it -- which an analysis must not rewrite until playback moves on.
+    protected: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Writes an analysis put off for that reason, made when it is safe.
+    held: Arc<Mutex<Vec<(PathBuf, GainTags)>>>,
+    /// The playback snapshot and where in it playback is, kept only to know
+    /// which track is preloaded next.
+    queue: Option<PlaybackSource>,
+    queue_position: Option<usize>,
+}
+
+/// A running loudness analysis. Dropping it stops the analysis after the
+/// albums in hand and waits for it, as [`WatchHandle`] does for a scan.
+#[derive(Debug)]
+struct GainHandle {
+    cancel: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for GainHandle {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 /// What [`Session::forget_unavailable`] removed.
@@ -156,6 +196,13 @@ impl Session {
             playback_state: PlaybackState::Stopped,
             position: Duration::ZERO,
             counted_this_play: false,
+            gain: None,
+            scan_hold: Arc::new(AtomicBool::new(false)),
+            scan_running: Arc::new(AtomicBool::new(false)),
+            protected: Arc::new(Mutex::new(HashSet::new())),
+            held: Arc::new(Mutex::new(Vec::new())),
+            queue: None,
+            queue_position: None,
         })
     }
 
@@ -293,13 +340,20 @@ impl Session {
 
     fn observe(&mut self, event: &Event) {
         match event {
-            Event::TrackChanged { track, .. } => {
+            Event::TrackChanged { track, position } => {
                 self.playing = Some(*track);
                 self.position = Duration::ZERO;
                 // A new track has not been played yet, even if it is the same
                 // one again -- repeat-one counts each time round.
                 self.counted_this_play = false;
+                self.queue_position = Some(*position);
+                self.refresh_protected();
             }
+            Event::QueueChanged(source) => {
+                self.queue = Some(source.clone());
+                self.refresh_protected();
+            }
+            Event::GainFinished(_) => self.finish_gain(),
             Event::PositionChanged(position) => {
                 self.position = *position;
                 self.count_play_if_earned();
@@ -308,6 +362,7 @@ impl Session {
                 self.playback_state = *state;
                 if *state == PlaybackState::Stopped {
                     self.playing = None;
+                    self.refresh_protected();
                 }
             }
             _ => {}
@@ -401,6 +456,8 @@ impl Session {
         let (rescan_tx, rescan_rx) = channel::<()>();
         let events = self.events.clone();
         let thread_stop = Arc::clone(&stop);
+        let hold = Arc::clone(&self.scan_hold);
+        let running = Arc::clone(&self.scan_running);
 
         let thread = std::thread::Builder::new()
             .name("scoria-scan".to_owned())
@@ -424,6 +481,23 @@ impl Session {
                         if !changed && !requested {
                             continue;
                         }
+                        scan_now = true;
+                    }
+                    // A loudness analysis is writing (§6.7). The scan stays
+                    // owed rather than dropped -- the writes are themselves
+                    // changes it has to see -- and happens once they stop.
+                    //
+                    // Claimed before the hold is checked, and the analysis
+                    // sets the hold before it checks the claim: whichever goes
+                    // second sees the other, so a scan and the writes can
+                    // never both proceed. SeqCst because this is that pattern
+                    // -- two flags, each side storing one and loading the
+                    // other -- and nothing weaker orders it.
+                    running.store(true, Ordering::SeqCst);
+                    if hold.load(Ordering::SeqCst) {
+                        running.store(false, Ordering::SeqCst);
+                        let _ = watcher.next_change(WATCH_POLL);
+                        continue;
                     }
                     scan_now = false;
                     // Drain any further requests that piled up, so a burst
@@ -438,7 +512,8 @@ impl Session {
                         });
                     };
 
-                    match scanner.scan(&mut db, &mut report) {
+                    let scanned = scanner.scan(&mut db, &mut report);
+                    match scanned {
                         Ok(outcome) => {
                             // Nothing changed after all -- a temporary file, or
                             // our own artwork cache being written. No deltas,
@@ -456,6 +531,9 @@ impl Session {
                     // "scanning" has no other way to learn that a scan which
                     // changed nothing has stopped.
                     let _ = events.send(Event::ScanFinished);
+                    // Released only now, so everything this scan said is
+                    // already sent before an analysis waiting on it writes.
+                    running.store(false, Ordering::SeqCst);
                 }
             })
             .map_err(|e| CoreError::Scan(format!("cannot start the scan thread: {e}")))?;
@@ -804,6 +882,137 @@ impl Session {
             self.send_to_engine(EngineCommand::SetResolver(resolver))?;
         }
         Ok(forgotten)
+    }
+
+    // ----------------------------------------------------------- loudness --
+
+    /// What a loudness analysis would do right now (§6.7).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::NoLibraryRoot`] if no root is set.
+    pub fn gain_plan(&self, all: bool) -> Result<GainPlan, CoreError> {
+        Ok(gain_plan::plan(&self.index, &self.library_root()?, all))
+    }
+
+    /// Whether a loudness analysis is running.
+    #[must_use]
+    pub fn gain_running(&self) -> bool {
+        self.gain.is_some()
+    }
+
+    /// Starts a loudness analysis on its own thread, returning how many albums
+    /// it will work through.
+    ///
+    /// Progress arrives as [`Event::GainProgress`], and the end, however it
+    /// comes, as [`Event::GainFinished`]. Scans the watch thread would have
+    /// run in the meantime are held and run once at the end, which is also
+    /// what delivers the new tags to the index.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Analysis`] if one is already running or the thread cannot
+    /// start; [`CoreError::LibraryUnreachable`] if the root is not on disk;
+    /// [`CoreError::NoLibraryRoot`] if none is set.
+    pub fn start_gain_analysis(&mut self, all: bool) -> Result<usize, CoreError> {
+        if self.gain.is_some() {
+            return Err(CoreError::Analysis(
+                "a loudness analysis is already running".to_owned(),
+            ));
+        }
+        let root = self.library_root()?;
+        if !root.is_dir() {
+            return Err(CoreError::LibraryUnreachable {
+                root: root.display().to_string(),
+            });
+        }
+        let plan = gain_plan::plan(&self.index, &root, all);
+        let total = plan.albums.len();
+
+        self.refresh_protected();
+        // Before the job looks at `scan_running`; see the watch thread.
+        self.scan_hold.store(true, Ordering::SeqCst);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let shared = GainShared {
+            cancel: Arc::clone(&cancel),
+            protected: Arc::clone(&self.protected),
+            held: Arc::clone(&self.held),
+            scan_running: Arc::clone(&self.scan_running),
+        };
+        let events = self.events.clone();
+        let spawned = std::thread::Builder::new()
+            .name("scoria-gain".to_owned())
+            .spawn(move || gain_job::run(&plan.albums, plan.skipped, &shared, &events));
+
+        match spawned {
+            Ok(thread) => {
+                self.gain = Some(GainHandle {
+                    cancel,
+                    thread: Some(thread),
+                });
+                Ok(total)
+            }
+            Err(e) => {
+                self.scan_hold.store(false, Ordering::SeqCst);
+                Err(CoreError::Analysis(format!(
+                    "cannot start loudness analysis: {e}"
+                )))
+            }
+        }
+    }
+
+    /// Asks a running analysis to stop after the albums it is working on.
+    /// [`Event::GainFinished`] follows, marked as stopped.
+    pub fn stop_gain_analysis(&self) {
+        if let Some(gain) = &self.gain {
+            gain.cancel.store(true, Ordering::Release);
+        }
+    }
+
+    /// Tidies up after an analysis has said it is finished.
+    fn finish_gain(&mut self) {
+        // Already done by the time it said so; this only joins it.
+        self.gain = None;
+        self.scan_hold.store(false, Ordering::SeqCst);
+        // The writes were changes; with watching running they are already
+        // owed a scan, and asking makes sure of it.
+        if self.watcher.is_some() {
+            let _ = self.request_rescan();
+        }
+        self.flush_held();
+    }
+
+    /// Works out which files playback has open, and makes any held write that
+    /// is now safe.
+    fn refresh_protected(&mut self) {
+        let mut paths = HashSet::new();
+        if let Ok(root) = self.library_root() {
+            // The one after the current track is preloaded a few seconds
+            // before the boundary, so its file is open too.
+            let next = self.queue.as_ref().and_then(|queue| {
+                let mut queue = queue.clone();
+                queue
+                    .set_position(self.queue_position?)
+                    .then(|| queue.peek_next())
+                    .flatten()
+            });
+            for id in self.playing.into_iter().chain(next) {
+                if let Some(track) = self.index.track(id) {
+                    paths.insert(track.path.to_absolute(&root));
+                }
+            }
+        }
+        *self
+            .protected
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = paths;
+        self.flush_held();
+    }
+
+    fn flush_held(&self) {
+        for error in gain_job::flush_held(&self.protected, &self.held) {
+            self.emit(Event::Error(error));
+        }
     }
 
     /// Records the play behaviour setting (§6.3) and saves it.

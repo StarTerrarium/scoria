@@ -84,6 +84,11 @@ pub enum CoreError {
     /// anything that would act on "missing" refuses instead (§7.4).
     #[error("the library folder {root} isn't reachable")]
     LibraryUnreachable { root: String },
+
+    /// Loudness analysis could not start, or failed as a whole (§6.7). A
+    /// single file that fails is reported in the analysis's own report.
+    #[error("{0}")]
+    Analysis(String),
 }
 
 #[cfg(test)]
@@ -129,6 +134,7 @@ mod tests {
             CoreError::Desktop("c".to_owned()),
             CoreError::Scan("d".to_owned()),
             CoreError::NoLibraryRoot,
+            CoreError::Analysis("e".to_owned()),
             CoreError::LibraryUnreachable {
                 root: "/home/someone/Music".to_owned(),
             },

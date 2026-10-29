@@ -41,19 +41,26 @@ impl Gain {
 /// An album's gains: one per track, in the order measured, and the album's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AlbumGains {
-    /// `None` for a track with no measurable loudness -- silence.
+    /// `None` only for a measurement that is not a number at all, which a
+    /// working decoder never produces; an album holding one is not written.
     pub tracks: Vec<Option<Gain>>,
     pub album: Option<Gain>,
 }
 
 /// The gain for something measured at `loudness` LUFS peaking at `peak`.
 ///
-/// `None` for silence: §6.7 says never estimate, and the alternative is an
-/// infinite number in a tag.
+/// Silence -- nothing above the absolute gate, so a loudness of negative
+/// infinity -- gets 0 dB: there is nothing to level, so nothing is raised.
+/// That is what rsgain writes for a silent track. For a silent album rsgain
+/// writes `inf dB`, which no player reads sensibly; this writes 0 dB there too.
+/// §6.7's "never estimate" is kept either way: no level is invented.
 #[must_use]
 pub fn gain(loudness: f64, peak: f64) -> Option<Gain> {
-    if !loudness.is_finite() || !peak.is_finite() {
+    if !peak.is_finite() || loudness.is_nan() || loudness == f64::INFINITY {
         return None;
+    }
+    if loudness == f64::NEG_INFINITY {
+        return Some(Gain { gain_db: 0.0, peak });
     }
     let mut gain_db = TARGET_LUFS - loudness;
 
@@ -137,9 +144,12 @@ mod tests {
     }
 
     #[test]
-    fn silence_gets_no_gain_rather_than_an_infinite_one() {
-        assert_eq!(gain(f64::NEG_INFINITY, 0.0), None);
+    fn silence_is_left_at_unity_rather_than_raised_infinitely() {
+        let g = gain(f64::NEG_INFINITY, 0.0).unwrap();
+        assert_eq!(g.gain_tag(), "0.00 dB");
+        assert_eq!(g.peak_tag(), "0.000000");
         assert_eq!(gain(f64::NAN, 0.5), None);
+        assert_eq!(gain(-10.0, f64::NAN), None);
     }
 
     #[test]
@@ -178,6 +188,13 @@ mod tests {
     }
 
     #[test]
+    fn a_wholly_silent_album_gets_unity_not_infinity() {
+        let silence = measure_samples(&vec![0.0; 96_000], 2, 48_000).unwrap();
+        let gains = album(&[silence]);
+        assert_eq!(gains.album.unwrap().gain_tag(), "0.00 dB");
+    }
+
+    #[test]
     fn the_album_peak_is_the_loudest_tracks() {
         let a = measure_samples(&sine(-12.0, 3.0), 2, 48_000).unwrap();
         let b = measure_samples(&sine(-3.0, 3.0), 2, 48_000).unwrap();
@@ -187,13 +204,13 @@ mod tests {
     }
 
     #[test]
-    fn a_silent_track_on_an_album_gets_nothing_and_takes_nothing() {
+    fn a_silent_track_on_an_album_is_left_alone_and_moves_nothing() {
         let tone = measure_samples(&sine(-20.0, 5.0), 2, 48_000).unwrap();
         let silence = measure_samples(&vec![0.0; 480_000], 2, 48_000).unwrap();
         let tone_alone = gain(tone.loudness(), tone.peak).unwrap();
         let gains = album(&[tone, silence]);
 
-        assert_eq!(gains.tracks[1], None);
+        assert_eq!(gains.tracks[1].unwrap().gain_tag(), "0.00 dB");
         // Gating discards silent blocks, so the album is just the tone.
         assert!((gains.album.unwrap().gain_db - tone_alone.gain_db).abs() < 0.01);
     }

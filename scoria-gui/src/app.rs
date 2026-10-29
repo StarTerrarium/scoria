@@ -512,6 +512,7 @@ impl App {
                     self.status = String::new();
                 }
                 CoreEvent::Error(e) => self.status = format!("{e}"),
+                CoreEvent::GainProgress { .. } | CoreEvent::GainFinished(_) => {}
             }
         }
 

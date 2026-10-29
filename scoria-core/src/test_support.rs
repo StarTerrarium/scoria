@@ -47,6 +47,11 @@ impl TrackBuilder {
         }
     }
 
+    pub fn path(mut self, relative: &str) -> Self {
+        self.track.path = RelativePath::new(relative).unwrap();
+        self
+    }
+
     pub fn album_artist(mut self, name: &str) -> Self {
         self.track.album_artist = name.to_owned();
         self

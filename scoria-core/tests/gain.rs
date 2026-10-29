@@ -5,7 +5,12 @@
 //! file tagged the way Picard tags one, with the multi-valued fields and the
 //! cover art that a careless rewrite would lose.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
@@ -251,4 +256,299 @@ fn a_decoded_file_measures_the_same_as_its_samples() {
         direct.loudness()
     );
     assert!((decoded.peak - direct.peak).abs() < 1e-4);
+}
+
+// ---------------------------------------------------------------------- job --
+
+use lofty::prelude::ItemKey;
+use scoria_core::config::Paths;
+use scoria_core::event::Event;
+use scoria_core::library::gain::GainReport;
+use scoria_core::library::gain::job::{self, Shared};
+use scoria_core::library::gain::plan::AlbumJob;
+use scoria_core::session::Session;
+use std::collections::HashSet;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+struct Home {
+    scratch: Scratch,
+}
+
+impl Home {
+    fn new(name: &str) -> Self {
+        Self {
+            scratch: Scratch::new(name),
+        }
+    }
+
+    fn root(&self) -> PathBuf {
+        self.scratch.root()
+    }
+
+    fn session(&self) -> Session {
+        let mut session = Session::open(Paths::rooted_at(self.scratch.path())).unwrap();
+        session.config_mut().root = Some(self.root());
+        session.rescan(&mut |_| {}).unwrap();
+        session
+    }
+
+    fn write(&self, relative: &str, album: &str) -> PathBuf {
+        self.scratch.write_track(
+            &self.root(),
+            relative,
+            &[
+                (ItemKey::TrackTitle, relative),
+                (ItemKey::AlbumArtist, "Someone"),
+                (ItemKey::AlbumTitle, album),
+            ],
+        )
+    }
+}
+
+fn track_gain(path: &Path) -> Option<String> {
+    read_flac(path)
+        .vorbis_comments()?
+        .get("REPLAYGAIN_TRACK_GAIN")
+        .map(str::to_owned)
+}
+
+/// Waits for an analysis to finish, as a frontend does.
+fn wait_for_report(session: &mut Session) -> GainReport {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        if let Some(Event::GainFinished(report)) = session.next_event(Duration::from_millis(100)) {
+            return report;
+        }
+    }
+    panic!("the analysis never said it had finished");
+}
+
+#[test]
+fn an_analysis_tags_every_gap_and_leaves_none_behind() {
+    let home = Home::new("gain-job");
+    let a = home.write("a/1.flac", "A");
+    let b = home.write("a/2.flac", "A");
+    let c = home.write("b/1.flac", "B");
+    let mut session = home.session();
+
+    let plan = session.gain_plan(false).unwrap();
+    assert_eq!(
+        (plan.albums.len(), plan.files(), plan.tracks_levelled),
+        (2, 3, 0)
+    );
+
+    assert_eq!(session.start_gain_analysis(false).unwrap(), 2);
+    assert!(session.gain_running());
+    let report = wait_for_report(&mut session);
+    assert!(!session.gain_running());
+    assert_eq!((report.albums_done, report.albums_total), (2, 2));
+    assert!(!report.stopped);
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+
+    // The fixture is silence, which rsgain leaves at unity too.
+    for path in [&a, &b, &c] {
+        assert_eq!(track_gain(path).as_deref(), Some("0.00 dB"));
+    }
+
+    // Once the tags are read back, there is nothing left to do.
+    session.rescan(&mut |_| {}).unwrap();
+    let after = session.gain_plan(false).unwrap();
+    assert!(after.albums.is_empty());
+    assert_eq!(after.tracks_levelled, 3);
+}
+
+#[test]
+fn an_album_with_a_missing_file_is_left_untouched() {
+    let home = Home::new("gain-missing");
+    let kept = home.write("a/1.flac", "A");
+    let gone = home.write("a/2.flac", "A");
+    let mut session = home.session();
+    std::fs::remove_file(&gone).unwrap();
+    session.rescan(&mut |_| {}).unwrap();
+
+    session.start_gain_analysis(false).unwrap();
+    let report = wait_for_report(&mut session);
+    assert_eq!(report.skipped.missing_files, 1);
+    assert_eq!(report.albums_total, 0);
+    assert_eq!(track_gain(&kept), None);
+}
+
+#[test]
+fn a_second_analysis_is_refused_while_one_runs() {
+    let home = Home::new("gain-busy");
+    for n in 0..20 {
+        home.write(&format!("a{n}/1.flac"), &format!("Album {n}"));
+    }
+    let mut session = home.session();
+    session.start_gain_analysis(false).unwrap();
+    // Either it is still running and refuses, or it already finished --
+    // never two at once.
+    if session.gain_running() {
+        assert!(session.start_gain_analysis(false).is_err());
+    }
+    wait_for_report(&mut session);
+}
+
+#[test]
+fn an_unreachable_library_is_refused() {
+    let home = Home::new("gain-unplugged");
+    home.write("a/1.flac", "A");
+    let mut session = home.session();
+    std::fs::remove_dir_all(home.root()).unwrap();
+    assert!(matches!(
+        session.start_gain_analysis(false),
+        Err(scoria_core::CoreError::LibraryUnreachable { .. })
+    ));
+    assert!(!session.gain_running());
+}
+
+fn shared() -> Shared {
+    Shared {
+        cancel: Arc::new(AtomicBool::new(false)),
+        protected: Arc::new(Mutex::new(HashSet::new())),
+        held: Arc::new(Mutex::new(Vec::new())),
+        scan_running: Arc::new(AtomicBool::new(false)),
+    }
+}
+
+fn album(tracks: &[&Path]) -> AlbumJob {
+    AlbumJob {
+        album_artist: "Someone".to_owned(),
+        title: "A".to_owned(),
+        tracks: tracks.iter().map(|p| p.to_path_buf()).collect(),
+    }
+}
+
+fn report_of(events: &std::sync::mpsc::Receiver<Event>) -> GainReport {
+    events
+        .try_iter()
+        .find_map(|e| match e {
+            Event::GainFinished(report) => Some(report),
+            _ => None,
+        })
+        .unwrap()
+}
+
+#[test]
+fn stopping_writes_nothing_more_and_says_it_stopped() {
+    let home = Home::new("gain-stop");
+    let path = home.write("a/1.flac", "A");
+    let shared = shared();
+    shared
+        .cancel
+        .store(true, std::sync::atomic::Ordering::Release);
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    job::run(&[album(&[&path])], Default::default(), &shared, &tx);
+    let report = report_of(&rx);
+    assert!(report.stopped);
+    assert_eq!(report.albums_done, 0);
+    assert_eq!(track_gain(&path), None);
+}
+
+#[test]
+fn the_playing_file_is_held_and_written_once_playback_moves_on() {
+    let home = Home::new("gain-held");
+    let playing = home.write("a/1.flac", "A");
+    let other = home.write("a/2.flac", "A");
+    let shared = shared();
+    shared.protected.lock().unwrap().insert(playing.clone());
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    job::run(
+        &[album(&[&playing, &other])],
+        Default::default(),
+        &shared,
+        &tx,
+    );
+    assert!(report_of(&rx).failed.is_empty());
+    assert_eq!(track_gain(&playing), None, "not while it is playing");
+    assert_eq!(track_gain(&other).as_deref(), Some("0.00 dB"));
+    assert_eq!(shared.held.lock().unwrap().len(), 1);
+
+    // Still playing: still held.
+    assert!(job::flush_held(&shared.protected, &shared.held).is_empty());
+    assert_eq!(track_gain(&playing), None);
+
+    shared.protected.lock().unwrap().clear();
+    assert!(job::flush_held(&shared.protected, &shared.held).is_empty());
+    assert_eq!(track_gain(&playing).as_deref(), Some("0.00 dB"));
+    assert!(shared.held.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_file_that_will_not_decode_leaves_its_whole_album_unwritten() {
+    let home = Home::new("gain-broken");
+    let good = home.write("a/1.flac", "A");
+    let broken = home.root().join("a/2.flac");
+    std::fs::write(&broken, b"not audio at all").unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    job::run(
+        &[album(&[&good, &broken])],
+        Default::default(),
+        &shared(),
+        &tx,
+    );
+    let report = report_of(&rx);
+    assert_eq!(report.failed.len(), 1);
+    assert!(report.failed[0].0.ends_with("2.flac"));
+    assert_eq!(
+        track_gain(&good),
+        None,
+        "album gain without track 2 would be wrong"
+    );
+}
+
+#[test]
+fn with_watching_on_the_new_tags_arrive_by_themselves_afterwards() {
+    // Scans are held while the analysis writes, then one runs and brings the
+    // tags into the index -- the frontend never has to ask.
+    let home = Home::new("gain-watched");
+    home.write("a/1.flac", "A");
+    home.write("a/2.flac", "A");
+    let mut session = home.session();
+    session.start_watching().unwrap();
+    // The catch-up scan watching always starts with.
+    let settle = std::time::Instant::now() + Duration::from_secs(20);
+    while std::time::Instant::now() < settle {
+        if let Some(Event::ScanFinished) = session.next_event(Duration::from_millis(100)) {
+            break;
+        }
+    }
+
+    session.start_gain_analysis(false).unwrap();
+    // A scan already under way when the analysis started is allowed to
+    // finish, and says everything it has to before the first album is
+    // written. Between the first album and the end, nothing may scan.
+    let mut writing = false;
+    let mut finished = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        match session.next_event(Duration::from_millis(100)) {
+            Some(Event::GainProgress { .. }) => writing = true,
+            Some(Event::GainFinished(_)) => finished = true,
+            Some(Event::ScanProgress { .. }) => {
+                assert!(
+                    !writing || finished,
+                    "a scan ran while the analysis was writing"
+                );
+            }
+            Some(Event::LibraryChanged(_)) if finished => {
+                session.reload_index().unwrap();
+                assert!(
+                    session
+                        .index()
+                        .tracks()
+                        .iter()
+                        .all(|t| t.replay_gain.track_gain_db.is_some())
+                );
+                return;
+            }
+            _ => {}
+        }
+    }
+    panic!("the new tags never reached the index");
 }

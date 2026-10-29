@@ -66,6 +66,16 @@ pub enum Event {
     /// keep saying it. Emitted after any deltas, and after `Error` when the
     /// scan failed, so it always terminates the sequence.
     ScanFinished,
+    /// An album of a loudness analysis is done (§6.7). `album` is its title,
+    /// for a frontend to say where it has got to.
+    GainProgress {
+        done: usize,
+        total: usize,
+        album: String,
+    },
+    /// A loudness analysis stopped, finished or not. Always the last thing an
+    /// analysis says, as `ScanFinished` is for a scan.
+    GainFinished(crate::library::gain::GainReport),
     /// A failure the core could not handle itself.
     ///
     /// This is what makes the no-panic policy workable: code that cannot
