@@ -184,6 +184,14 @@ pub struct App {
     /// The playback snapshot, as the engine last reported it. This is what the
     /// queue shows -- §6.2's `tracks`, not the current view.
     queue: Option<scoria_core::PlaybackSource>,
+    /// Tracks that were forgotten (§7.4) while the snapshot still held them.
+    ///
+    /// The snapshot is never rebuilt (§6.1), so their ids stay in the queue
+    /// and are skipped -- but the index no longer knows them, and a row the
+    /// table cannot look up is drawn blank. Kept here, still marked missing,
+    /// so the queue goes on showing what it showed a moment earlier. Pruned
+    /// whenever the snapshot changes.
+    forgotten: std::collections::HashMap<TrackId, Track>,
     queue_lines: Vec<table::Line>,
     queue_scroll: f32,
     /// The row the queue's own cursor is on, independent of what is playing.
@@ -280,6 +288,7 @@ impl App {
             overlay: None,
             dragging_drawer: false,
             queue: None,
+            forgotten: std::collections::HashMap::new(),
             queue_lines: Vec::new(),
             queue_scroll: 0.0,
             queue_selection: std::collections::BTreeSet::new(),
@@ -476,6 +485,7 @@ impl App {
                     self.shuffled = source.is_shuffled();
                     self.repeat = source.repeat();
                     self.queue_lines = table::build_lines(source.len(), &[]);
+                    self.forgotten.retain(|id, _| source.tracks().contains(id));
                     self.queue = Some(source);
                 }
                 CoreEvent::LibraryChanged(delta) => {
@@ -595,13 +605,28 @@ impl App {
         let Some(session) = &mut self.session else {
             return;
         };
+
+        // Copied before they go, for the queue's sake: see `forgotten`.
+        let queued: std::collections::HashSet<TrackId> = self
+            .queue
+            .as_ref()
+            .map(|q| q.tracks().iter().copied().collect())
+            .unwrap_or_default();
+        let keep: Vec<Track> = session
+            .index()
+            .tracks()
+            .iter()
+            .filter(|t| !t.available && queued.contains(&t.id))
+            .cloned()
+            .collect();
+
         // On success the status comes from the TracksRemoved this emits, by
         // way of `on_library_changed`, so it is said in one place.
         match session.forget_unavailable() {
             Ok(forgotten) if forgotten.tracks == 0 => {
                 "No missing tracks.".clone_into(&mut self.status);
             }
-            Ok(_) => {}
+            Ok(_) => self.forgotten.extend(keep.into_iter().map(|t| (t.id, t))),
             Err(e) => self.status = format!("Could not forget missing tracks: {e}"),
         }
     }
@@ -1819,7 +1844,8 @@ impl App {
                     lines: &self.queue_lines,
                     rows: Box::new(|index| {
                         let queue = self.queue.as_ref()?;
-                        self.track(*queue.tracks().get(index)?)
+                        let id = *queue.tracks().get(index)?;
+                        self.track(id).or_else(|| self.forgotten.get(&id))
                     }),
                     position: self
                         .queue
