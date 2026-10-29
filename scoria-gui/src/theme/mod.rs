@@ -436,6 +436,27 @@ impl Theme {
         }
     }
 
+    /// A button that adds something and asks to be sure first: filled more
+    /// strongly with the accent than [`Self::chip_button`], so the confirming
+    /// button and the one beside it that cancels do not look alike.
+    #[must_use]
+    pub fn accent_button(&self, status: button::Status) -> button::Style {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let tint = if hovered { 0.55 } else { 0.40 };
+        button::Style {
+            background: Some(Background::Color(colour(
+                self.roles.background.mix(self.roles.accent, tint),
+            ))),
+            text_color: colour(self.roles.text),
+            border: Border {
+                color: colour(self.roles.accent),
+                width: 1.0,
+                radius: border::radius(3),
+            },
+            ..button::Style::default()
+        }
+    }
+
     #[must_use]
     pub fn rule_style(&self) -> rule::Style {
         rule::Style {

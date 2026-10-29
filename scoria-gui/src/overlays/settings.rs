@@ -32,14 +32,53 @@ pub struct SettingsView<'a> {
     pub config_file: PathBuf,
     pub database: PathBuf,
     pub artwork_cache: PathBuf,
-    /// How much of the library carries ReplayGain tags (§6.7).
-    ///
-    /// Here because a library that is mostly untagged sounds uneven, and
-    /// nothing else in the application would ever say why.
-    pub gain_tagged: usize,
     pub track_count: usize,
     pub missing: Missing,
+    /// How much of the library is levelled, and what can be done about the
+    /// rest (§6.7).
+    ///
+    /// Here because a library that is partly untagged sounds uneven, and
+    /// nothing else in the application would ever say why.
+    pub loudness: Loudness,
+    /// Files the last analysis could not measure or write, with why, already
+    /// phrased for display.
+    pub gain_failures: &'a [(String, String)],
     pub theme: &'a Theme,
+}
+
+/// How many tracks are levelled, and what an analysis would do about the rest.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LoudnessCounts {
+    pub levelled: usize,
+    pub total: usize,
+    /// Albums an analysis would work through, and how many files that is.
+    pub albums: usize,
+    pub files: usize,
+    /// Albums with gaps that an analysis has to leave alone, by reason.
+    pub skipped_missing: usize,
+    pub skipped_unsupported: usize,
+}
+
+/// The Loudness row's state (§6.7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Loudness {
+    /// An empty library has nothing to say about loudness.
+    None,
+    AllLevelled,
+    /// Gaps an analysis would fill.
+    Ready(LoudnessCounts),
+    /// Gaps, but none an analysis can fill: every album with one is skipped.
+    Stuck(LoudnessCounts),
+    /// Asked once; waiting to be asked again, or told no.
+    Armed(LoudnessCounts),
+    Running {
+        done: usize,
+        total: usize,
+        album: String,
+    },
+    /// A scan is running; analysing now would race it.
+    Scanning(LoudnessCounts),
+    Unreachable(LoudnessCounts),
 }
 
 /// What can be done about tracks whose files are gone (§7.4, "Forgetting").
@@ -71,6 +110,11 @@ pub enum Event {
     ForgetMissing,
     ConfirmForget,
     CancelForget,
+    /// Arm the Loudness row. Nothing is written yet.
+    AnalyseGain,
+    ConfirmAnalyse,
+    CancelAnalyse,
+    StopAnalyse,
 }
 
 #[must_use]
@@ -133,6 +177,7 @@ pub fn view<'a, Message: Clone + 'a>(
             body = body.push(confirm_row(
                 "Missing",
                 format!("Forget {tracks}? Their play counts go too."),
+                Confirm::Destructive("Forget"),
                 theme,
                 on_event(Event::ConfirmForget),
                 on_event(Event::CancelForget),
@@ -156,18 +201,13 @@ pub fn view<'a, Message: Clone + 'a>(
 
     // §6.7: the feature is only as good as the library's tag coverage, and a
     // partly tagged library sounds uneven for a reason nothing else explains.
-    if let Some(percent) = (settings.gain_tagged * 100).checked_div(settings.track_count) {
-        let note = if settings.gain_tagged == settings.track_count {
-            "Every track is tagged for loudness levelling".to_owned()
-        } else {
-            format!(
-                "{}% of tracks carry ReplayGain tags. Scoria reads them and never computes \
-                 them; `rsgain easy` fills the gaps.",
-                percent
-            )
-        };
-        body = body.push(note_row(note, theme));
-    }
+    body = loudness_rows(
+        body,
+        &settings.loudness,
+        settings.gain_failures,
+        theme,
+        &on_event,
+    );
 
     // ----------------------------------------------------------- playback --
 
@@ -292,6 +332,137 @@ fn action_row<'a, Message: Clone + 'a>(
     .into()
 }
 
+fn plural(n: usize, one: &str, many: &str) -> String {
+    if n == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{n} {many}")
+    }
+}
+
+/// The Loudness row, and the notes beneath it.
+fn loudness_rows<'a, Message: Clone + 'a>(
+    mut body: iced::widget::Column<'a, Message, Theme>,
+    loudness: &Loudness,
+    failures: &'a [(String, String)],
+    theme: &Theme,
+    on_event: &(impl Fn(Event) -> Message + Clone + 'a),
+) -> iced::widget::Column<'a, Message, Theme> {
+    let levelled = |c: &LoudnessCounts| format!("{} of {} tracks levelled", c.levelled, c.total);
+    let skipped_notes = |c: &LoudnessCounts| {
+        let mut notes = Vec::new();
+        if c.skipped_missing > 0 {
+            notes.push(format!(
+                "{} left alone: some of their files are missing.",
+                plural(c.skipped_missing, "album", "albums")
+            ));
+        }
+        if c.skipped_unsupported > 0 {
+            notes.push(format!(
+                "{} left alone: only FLAC and Ogg Vorbis can be tagged so far.",
+                plural(c.skipped_unsupported, "album", "albums")
+            ));
+        }
+        notes
+    };
+
+    match loudness {
+        Loudness::None => {}
+        Loudness::AllLevelled => {
+            body = body.push(value_row(
+                "Loudness",
+                "Every track is levelled".to_owned(),
+                theme,
+            ));
+        }
+        Loudness::Ready(c) => {
+            body = body.push(action_row(
+                "Loudness",
+                levelled(c),
+                "Analyse…",
+                theme,
+                on_event(Event::AnalyseGain),
+            ));
+            body = body.push(note_row(
+                "Reads each album that lacks loudness tags and writes ReplayGain tags into its \
+                 files, as `rsgain easy` would."
+                    .to_owned(),
+                theme,
+            ));
+            for note in skipped_notes(c) {
+                body = body.push(note_row(note, theme));
+            }
+        }
+        Loudness::Stuck(c) => {
+            body = body.push(value_row("Loudness", levelled(c), theme));
+            for note in skipped_notes(c) {
+                body = body.push(note_row(note, theme));
+            }
+        }
+        Loudness::Armed(c) => {
+            body = body.push(confirm_row(
+                "Loudness",
+                format!(
+                    "Write loudness tags into {} ({})?",
+                    plural(c.files, "file", "files"),
+                    plural(c.albums, "album", "albums")
+                ),
+                Confirm::Additive("Analyse"),
+                theme,
+                on_event(Event::ConfirmAnalyse),
+                on_event(Event::CancelAnalyse),
+            ));
+        }
+        Loudness::Running { done, total, album } => {
+            let progress = if album.is_empty() {
+                format!("Analysing {total} albums")
+            } else {
+                format!("Analysing {done} of {total} albums · {album}")
+            };
+            body = body.push(action_row(
+                "Loudness",
+                progress,
+                "Stop",
+                theme,
+                on_event(Event::StopAnalyse),
+            ));
+        }
+        Loudness::Scanning(c) => {
+            body = body.push(value_row(
+                "Loudness",
+                format!("{} · available when the scan finishes", levelled(c)),
+                theme,
+            ));
+        }
+        Loudness::Unreachable(c) => {
+            body = body.push(value_row(
+                "Loudness",
+                format!("{} · the library folder isn't reachable", levelled(c)),
+                theme,
+            ));
+        }
+    }
+
+    // What the last analysis could not do, until the next one. A handful,
+    // because a list of hundreds says nothing a count does not.
+    const SHOWN: usize = 5;
+    for (path, reason) in failures.iter().take(SHOWN) {
+        body = body.push(note_row(format!("Couldn't write {path}: {reason}"), theme));
+    }
+    if let Some(more) = failures.len().checked_sub(SHOWN).filter(|n| *n > 0) {
+        body = body.push(note_row(format!("…and {more} more"), theme));
+    }
+    body
+}
+
+/// What the confirming button of a [`confirm_row`] does, which decides how it
+/// looks: removing something reads differently from adding to it.
+#[derive(Debug, Clone, Copy)]
+enum Confirm {
+    Destructive(&'static str),
+    Additive(&'static str),
+}
+
 /// A labelled value and nothing to press: the Missing row when pressing would
 /// be wrong, which it says in words rather than by greying a button out.
 fn value_row<'a, Message: Clone + 'a>(
@@ -323,20 +494,29 @@ fn value_row<'a, Message: Clone + 'a>(
 fn confirm_row<'a, Message: Clone + 'a>(
     label: &'static str,
     question: String,
+    kind: Confirm,
     theme: &Theme,
     confirm: Message,
     cancel: Message,
 ) -> Element<'a, Message, Theme> {
     let muted = theme.text_style(theme.muted_colour());
+    let (word, destructive) = match kind {
+        Confirm::Destructive(word) => (word, true),
+        Confirm::Additive(word) => (word, false),
+    };
     container(
         row![
             container(text(label).size(12).style(move |_t: &Theme| muted))
                 .width(Length::Fixed(120.0)),
             container(text(question).size(13)).width(Fill).clip(true),
-            iced::widget::button(text("Forget").size(12))
+            iced::widget::button(text(word).size(12))
                 .padding([2, 10])
                 .on_press(confirm)
-                .style(|t: &Theme, status| t.danger_button(status)),
+                .style(move |t: &Theme, status| if destructive {
+                    t.danger_button(status)
+                } else {
+                    t.accent_button(status)
+                }),
             iced::widget::button(text("Cancel").size(12))
                 .padding([2, 10])
                 .on_press(cancel)

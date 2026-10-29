@@ -169,6 +169,17 @@ pub struct App {
     /// The settings drawer's Missing row has been pressed once and is asking
     /// to be sure (§7.4). Anything else that happens disarms it.
     forget_armed: bool,
+    /// Likewise the Loudness row (§6.7).
+    gain_armed: bool,
+    /// A loudness analysis this frontend started, as its last progress
+    /// report put it: albums done, albums in all, the last one finished.
+    gain_progress: Option<(usize, usize, String)>,
+    /// What the last analysis could not do, relative to the root, kept until
+    /// the next one starts.
+    gain_failures: Vec<(String, String)>,
+    /// What an analysis would do now. Worked out when it could have changed
+    /// rather than in the view, because it walks the whole library.
+    loudness_counts: overlays::settings::LoudnessCounts,
     /// Whether the library root was on disk when last looked at.
     ///
     /// Cached rather than asked in the view, which runs every frame and should
@@ -284,6 +295,10 @@ impl App {
             status,
             scanning: None,
             forget_armed: false,
+            gain_armed: false,
+            gain_progress: None,
+            gain_failures: Vec::new(),
+            loudness_counts: overlays::settings::LoudnessCounts::default(),
             root_reachable: true,
             overlay: None,
             dragging_drawer: false,
@@ -495,9 +510,9 @@ impl App {
                     library_changed = Some(delta);
                 }
                 CoreEvent::ScanProgress { seen, total } => {
-                    // Forgetting mid-scan would race the scan's own idea of
-                    // what is missing, so an armed row stands down.
-                    self.forget_armed = false;
+                    // Forgetting or analysing mid-scan would race the scan,
+                    // so an armed row stands down.
+                    self.disarm();
                     self.scanning = Some(welcome::Scan { seen, total });
                     self.status = match total {
                         Some(total) => format!("scanning {seen}/{total}"),
@@ -512,7 +527,24 @@ impl App {
                     self.status = String::new();
                 }
                 CoreEvent::Error(e) => self.status = format!("{e}"),
-                CoreEvent::GainProgress { .. } | CoreEvent::GainFinished(_) => {}
+                CoreEvent::GainProgress { done, total, album } => {
+                    self.status = format!("levelling {done}/{total}");
+                    self.gain_progress = Some((done, total, album));
+                }
+                CoreEvent::GainFinished(report) => {
+                    self.gain_progress = None;
+                    self.status = gain_summary(&report);
+                    let root = self.session.as_ref().and_then(|s| s.config().root.clone());
+                    self.gain_failures = report
+                        .failed
+                        .into_iter()
+                        .map(|(path, reason)| (relative_to(&path, root.as_deref()), reason))
+                        .collect();
+                    // The new tags reach the index by the scan that follows,
+                    // and `on_library_changed` counts again then; this catches
+                    // an analysis that wrote nothing.
+                    self.refresh_library_facts();
+                }
             }
         }
 
@@ -559,8 +591,8 @@ impl App {
             self.selection_rows.focus(index, self.rows.len());
         }
 
-        self.forget_armed = false;
-        self.refresh_reachability();
+        self.disarm();
+        self.refresh_library_facts();
         self.status = describe(delta, self.rows.len());
     }
 
@@ -580,6 +612,71 @@ impl App {
             self.scanning.is_some(),
             self.forget_armed,
         )
+    }
+
+    /// Stands down any armed question in the settings drawer, saying whether
+    /// there was one.
+    fn disarm(&mut self) -> bool {
+        let was = self.forget_armed || self.gain_armed;
+        self.forget_armed = false;
+        self.gain_armed = false;
+        was
+    }
+
+    /// Looks again at what the settings drawer's upkeep rows depend on.
+    fn refresh_library_facts(&mut self) {
+        self.refresh_reachability();
+        self.loudness_counts = self
+            .session
+            .as_ref()
+            .and_then(|session| session.gain_plan(false).ok())
+            .map(|plan| overlays::settings::LoudnessCounts {
+                levelled: plan.tracks_levelled,
+                total: plan.tracks_total,
+                albums: plan.albums.len(),
+                files: plan.files(),
+                skipped_missing: plan.skipped.missing_files,
+                skipped_unsupported: plan.skipped.unsupported,
+            })
+            .unwrap_or_default();
+    }
+
+    /// What the settings drawer's Loudness row should offer (§6.7).
+    fn loudness(&self) -> overlays::settings::Loudness {
+        loudness_state(
+            self.loudness_counts,
+            self.root_reachable,
+            self.scanning.is_some(),
+            self.gain_armed,
+            self.gain_progress.clone(),
+        )
+    }
+
+    /// Arms the Loudness row, if pressing it would be right.
+    fn arm_gain(&mut self) {
+        self.refresh_library_facts();
+        self.gain_armed = matches!(self.loudness(), overlays::settings::Loudness::Ready(_));
+    }
+
+    /// The second press (§6.7). Re-checks, because a scan can have started in
+    /// between.
+    fn start_gain(&mut self) {
+        let armed = std::mem::take(&mut self.gain_armed);
+        self.refresh_reachability();
+        if !armed || self.scanning.is_some() || !self.root_reachable {
+            return;
+        }
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        match session.start_gain_analysis(false) {
+            Ok(total) => {
+                self.gain_failures.clear();
+                self.gain_progress = Some((0, total, String::new()));
+                self.status = format!("levelling 0/{total}");
+            }
+            Err(e) => self.status = format!("Could not start the analysis: {e}"),
+        }
     }
 
     fn refresh_reachability(&mut self) {
@@ -726,18 +823,6 @@ impl App {
         }
     }
 
-    /// How many tracks carry ReplayGain tags (§6.7).
-    fn gain_tagged(&self) -> usize {
-        self.session.as_ref().map_or(0, |session| {
-            session
-                .index()
-                .tracks()
-                .iter()
-                .filter(|t| t.replay_gain.is_tagged())
-                .count()
-        })
-    }
-
     /// The settings drawer (§9.4).
     fn on_settings(&mut self, event: overlays::settings::Event) -> Task<Message> {
         use overlays::settings::Event as E;
@@ -762,6 +847,15 @@ impl App {
             E::ForgetMissing => self.arm_forget(),
             E::ConfirmForget => self.forget_missing(),
             E::CancelForget => self.forget_armed = false,
+            E::AnalyseGain => self.arm_gain(),
+            E::ConfirmAnalyse => self.start_gain(),
+            E::CancelAnalyse => self.gain_armed = false,
+            E::StopAnalyse => {
+                if let Some(session) = &self.session {
+                    session.stop_gain_analysis();
+                    "stopping after the current track…".clone_into(&mut self.status);
+                }
+            }
         }
         Task::none()
     }
@@ -1116,10 +1210,10 @@ impl App {
     /// overlay appearing fully formed, because only the first reset the clock,
     /// is exactly the "did anything happen?" problem this exists to solve.
     fn set_overlay(&mut self, requested: Option<Overlay>) {
-        if requested != Some(Overlay::Settings) {
-            self.forget_armed = false;
+        if requested == Some(Overlay::Settings) {
+            self.refresh_library_facts();
         } else {
-            self.refresh_reachability();
+            self.disarm();
         }
         let now = std::time::Instant::now();
         match (requested, self.overlay) {
@@ -1387,10 +1481,10 @@ impl App {
                 if self.menu.take().is_some() {
                     return Task::none();
                 }
-                // Likewise an armed Missing row: the question is the most
-                // recent thing on screen, so Escape answers it before it
-                // closes the drawer it is asked in.
-                if std::mem::take(&mut self.forget_armed) {
+                // Likewise an armed question in the settings drawer: it is
+                // the most recent thing on screen, so Escape answers it
+                // before it closes the drawer it is asked in.
+                if self.disarm() {
                     return Task::none();
                 }
                 if self.open_overlay_kind().is_none() {
@@ -1819,9 +1913,10 @@ impl App {
                     config_file: self.paths.config_file(),
                     database: self.paths.database(),
                     artwork_cache: self.paths.artwork_cache(),
-                    gain_tagged: self.gain_tagged(),
                     track_count: self.session.as_ref().map_or(0, |s| s.index().len()),
                     missing: self.missing(),
+                    loudness: self.loudness(),
+                    gain_failures: &self.gain_failures,
                     theme: &self.theme,
                 },
                 Message::Settings,
@@ -2168,6 +2263,85 @@ fn missing_state(
     }
 }
 
+/// The Loudness row's state (§6.7).
+///
+/// A running analysis outranks everything: it is what is happening. After
+/// that, the order of what makes starting one wrong, as for the Missing row.
+fn loudness_state(
+    counts: overlays::settings::LoudnessCounts,
+    reachable: bool,
+    scanning: bool,
+    armed: bool,
+    progress: Option<(usize, usize, String)>,
+) -> overlays::settings::Loudness {
+    use overlays::settings::Loudness;
+    if let Some((done, total, album)) = progress {
+        return Loudness::Running { done, total, album };
+    }
+    if counts.total == 0 {
+        Loudness::None
+    } else if counts.levelled == counts.total {
+        Loudness::AllLevelled
+    } else if !reachable {
+        Loudness::Unreachable(counts)
+    } else if scanning {
+        Loudness::Scanning(counts)
+    } else if counts.albums == 0 {
+        Loudness::Stuck(counts)
+    } else if armed {
+        Loudness::Armed(counts)
+    } else {
+        Loudness::Ready(counts)
+    }
+}
+
+/// What the status line says when an analysis ends.
+fn gain_summary(report: &scoria_core::library::gain::GainReport) -> String {
+    let albums = |n: usize| {
+        if n == 1 {
+            "1 album".to_owned()
+        } else {
+            format!("{n} albums")
+        }
+    };
+    let mut summary = if report.stopped {
+        format!(
+            "Stopped after {} of {}.",
+            report.albums_done,
+            albums(report.albums_total)
+        )
+    } else {
+        format!("Levelled {}.", albums(report.albums_done))
+    };
+    let mut clauses = Vec::new();
+    if report.skipped.missing_files > 0 {
+        clauses.push(format!(
+            "{} skipped (missing files)",
+            report.skipped.missing_files
+        ));
+    }
+    if report.skipped.unsupported > 0 {
+        clauses.push(format!(
+            "{} skipped (format not yet supported)",
+            report.skipped.unsupported
+        ));
+    }
+    if !report.failed.is_empty() {
+        clauses.push(format!("{} couldn't be written", report.failed.len()));
+    }
+    if !clauses.is_empty() {
+        summary.push(' ');
+        summary.push_str(&clauses.join(" · "));
+    }
+    summary
+}
+
+/// A path as the person thinks of it: inside their library, when it is.
+fn relative_to(path: &str, root: Option<&std::path::Path>) -> String {
+    root.and_then(|root| std::path::Path::new(path).strip_prefix(root).ok())
+        .map_or_else(|| path.to_owned(), |p| p.display().to_string())
+}
+
 fn describe(delta: &scoria_core::event::LibraryDelta, showing: usize) -> String {
     use scoria_core::event::LibraryDelta as D;
     match delta {
@@ -2342,6 +2516,133 @@ mod tests {
         let mut app = App::disconnected(String::new());
         app.forget_missing();
         assert!(!app.forget_armed);
+    }
+
+    // -------------------------------------------------------------- loudness --
+
+    fn counts(levelled: usize, total: usize, albums: usize) -> overlays::settings::LoudnessCounts {
+        overlays::settings::LoudnessCounts {
+            levelled,
+            total,
+            albums,
+            files: albums * 10,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_running_analysis_is_shown_whatever_else_is_true() {
+        use overlays::settings::Loudness;
+        let running = Some((3, 9, "Vheissu".to_owned()));
+        for reachable in [true, false] {
+            for scanning in [true, false] {
+                assert_eq!(
+                    loudness_state(counts(0, 9, 9), reachable, scanning, true, running.clone()),
+                    Loudness::Running {
+                        done: 3,
+                        total: 9,
+                        album: "Vheissu".to_owned()
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_loudness_row_says_why_it_cannot_start() {
+        use overlays::settings::Loudness;
+        let c = counts(5, 10, 2);
+        assert_eq!(
+            loudness_state(c, false, false, true, None),
+            Loudness::Unreachable(c)
+        );
+        assert_eq!(
+            loudness_state(c, true, true, true, None),
+            Loudness::Scanning(c)
+        );
+        assert_eq!(
+            loudness_state(c, true, false, true, None),
+            Loudness::Armed(c)
+        );
+        assert_eq!(
+            loudness_state(c, true, false, false, None),
+            Loudness::Ready(c)
+        );
+    }
+
+    #[test]
+    fn gaps_nothing_can_fill_are_not_offered_a_button() {
+        use overlays::settings::Loudness;
+        let c = counts(5, 10, 0);
+        assert_eq!(
+            loudness_state(c, true, false, false, None),
+            Loudness::Stuck(c)
+        );
+        assert_eq!(
+            loudness_state(counts(10, 10, 0), true, false, false, None),
+            Loudness::AllLevelled
+        );
+        assert_eq!(
+            loudness_state(counts(0, 0, 0), true, false, false, None),
+            Loudness::None
+        );
+    }
+
+    #[test]
+    fn escape_answers_the_loudness_question_first_too() {
+        let mut app = App::disconnected(String::new());
+        app.set_overlay(Some(Overlay::Settings));
+        app.gain_armed = true;
+        let _ = app.on_action(Action::Dismiss);
+        assert!(!app.gain_armed);
+        assert_eq!(app.open_overlay_kind(), Some(Overlay::Settings));
+    }
+
+    #[test]
+    fn confirming_an_analysis_nobody_armed_starts_nothing() {
+        let mut app = App::disconnected(String::new());
+        app.start_gain();
+        assert!(app.gain_progress.is_none());
+    }
+
+    #[test]
+    fn the_summary_names_each_exception_once() {
+        use scoria_core::library::gain::{GainReport, Skipped};
+        let clean = GainReport {
+            albums_done: 312,
+            albums_total: 312,
+            ..Default::default()
+        };
+        assert_eq!(gain_summary(&clean), "Levelled 312 albums.");
+
+        let messy = GainReport {
+            albums_done: 41,
+            albums_total: 312,
+            stopped: true,
+            skipped: Skipped {
+                missing_files: 4,
+                unsupported: 12,
+            },
+            failed: vec![("a".to_owned(), "b".to_owned()); 2],
+        };
+        assert_eq!(
+            gain_summary(&messy),
+            "Stopped after 41 of 312 albums. 4 skipped (missing files) · \
+             12 skipped (format not yet supported) · 2 couldn't be written"
+        );
+    }
+
+    #[test]
+    fn a_failed_file_is_named_inside_the_library() {
+        let root = std::path::Path::new("/home/someone/Music");
+        assert_eq!(
+            relative_to("/home/someone/Music/A/B/01.flac", Some(root)),
+            "A/B/01.flac"
+        );
+        assert_eq!(
+            relative_to("/elsewhere/x.flac", Some(root)),
+            "/elsewhere/x.flac"
+        );
     }
 
     #[test]
