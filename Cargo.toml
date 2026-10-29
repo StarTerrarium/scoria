@@ -52,6 +52,12 @@ rodio = { version = "0.22", features = [
     "symphonia-adpcm",
 ] }
 symphonia = "0.5"
+# Loudness analysis (DESIGN.md 6.7): EBU R128 / ITU BS.1770 integrated loudness
+# with gating, and sample peak. A pure-Rust port of libebur128, which is what
+# rsgain itself measures with -- matching rsgain's numbers means using its
+# algorithm, and loudness gating is easy to get subtly wrong by hand. What it
+# replaces: asking users to install and run rsgain.
+ebur128 = "0.1.11"
 
 # Library and storage.
 lofty = "0.25"

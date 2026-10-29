@@ -9,6 +9,7 @@ pub mod command;
 pub mod config;
 pub mod date;
 pub mod db;
+pub mod decode;
 pub mod error;
 pub mod event;
 pub mod id;

@@ -31,8 +31,6 @@ use rodio::source::Source;
 use rodio::stream::DeviceSinkBuilder;
 use rodio::{MixerDeviceSink, Player};
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::BufReader;
 use std::time::Duration;
 
 /// A track handed to the player, and the switch that can retract it.
@@ -79,33 +77,7 @@ impl RodioBackend {
 
     /// Opens a file and wraps it with its own gain and a cancel switch.
     fn append(&mut self, track: &TrackRef, gain_db: f32) -> Result<(), CoreError> {
-        let file = File::open(&track.path)
-            .map_err(|e| CoreError::Audio(format!("cannot open {}: {e}", track.path.display())))?;
-
-        // The byte length is what makes the stream seekable. `Decoder::new`
-        // declares neither, so Symphonia treats the input as a stream it cannot
-        // rewind: seeking forward still works, because that is reading ahead,
-        // but every backward seek fails. The symptom is a seek bar that only
-        // moves one way.
-        let byte_len = file.metadata().ok().map(|m| m.len());
-
-        let mut builder = rodio::Decoder::builder()
-            .with_data(BufReader::new(file))
-            .with_seekable(true)
-            // Trims encoder delay and padding where the format records them.
-            // Free for FLAC, which has neither, and the beginning of what §10
-            // defers for MP3.
-            .with_gapless(true);
-        if let Some(len) = byte_len {
-            builder = builder.with_byte_len(len);
-        }
-        if let Some(hint) = track.path.extension().and_then(|e| e.to_str()) {
-            builder = builder.with_hint(hint);
-        }
-
-        let decoder = builder.build().map_err(|e| {
-            CoreError::Audio(format!("cannot decode {}: {e}", track.path.display()))
-        })?;
+        let decoder = crate::decode::open(&track.path)?;
 
         // Gain rides on the source rather than on the player, because the
         // player's volume would also apply to whatever else is queued.

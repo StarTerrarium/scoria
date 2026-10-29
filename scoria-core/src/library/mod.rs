@@ -1,6 +1,7 @@
 //! Scanning, tag reading, artwork and album identity.
 
 pub mod artwork;
+pub mod gain;
 pub mod identity;
 pub mod scanner;
 pub mod tags;
