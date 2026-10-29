@@ -372,7 +372,7 @@ Repeat is `Off | All | One`. `All` wraps at the end of the snapshot; `One` repea
 
 ### 6.7 ReplayGain
 
-Read from tags at scan time, never computed by analysing audio -- that is a different program's job (`rsgain`, `beets`). Track and album gain and peak are all stored.
+Read from tags at scan time. Track and album gain and peak are all stored. Scoria can also compute them and write the tags, when asked -- see **Computing gain** below.
 
 `REPLAYGAIN_*` is what 1.0 reads, which covers FLAC, MP3 and any Vorbis-comment file written by the usual tools. Opus and Vorbis may instead carry `R128_*`, in a different unit. That is **not** read yet: `lofty`'s generic tag interface has no escape hatch for arbitrary keys, so reaching them means a per-format code path, and it is not worth one while FLAC is the first-class target (§5.2). It lands with broad format support, before release.
 
@@ -380,13 +380,26 @@ Read from tags at scan time, never computed by analysing audio -- that is a diff
 
 A track with no gain tags plays at 0 dB. Never estimate, never substitute a neighbour's value: a wrong gain is more jarring than none. Peak values are honoured so a positive gain cannot clip.
 
-This is worth stating plainly: the feature is only as good as the library's tag coverage, and a partially tagged library will have audible steps between normalised and un-normalised tracks. The fix is tagging the library, not heuristics in the player.
+This is worth stating plainly: the feature is only as good as the library's tag coverage, and a partially tagged library will have audible steps between normalised and un-normalised tracks. The fix is tagging the library, not heuristics in the player -- which is why Scoria now offers to do the tagging.
+
+**Computing gain.** This section used to say that computing gain was "a different program's job", and sent people to `rsgain`. That was a correct decision for 1.0 and a poor experience: the settings drawer ended by recommending a second tool to make the first one work properly. Scoria now measures loudness itself and writes the tags, under these rules:
+
+- **Only when asked, and confirmed.** It is the first time Scoria writes to the library, so it never happens unprompted -- not after a scan, not for a new album. The confirmation states how many files will be written.
+- **Into the files, not the database.** The library is the source of truth (§13). Tags in the files reach every other player and survive a deleted database; values kept only in Scoria would do neither, and would need protecting from every rescan, as play counts are.
+- **The same values as `rsgain easy`.** ReplayGain 2.0's -18 LUFS reference, EBU R128 measurement, album gain, clipping protection for positive gains only with a 0 dB ceiling, sample peak, upper-case tag names. Taken from rsgain's installed preset, not from memory. Measurement uses `ebur128`, a port of the libebur128 rsgain itself uses, so tags from either tool sit at the same level and the two can be mixed freely. Checked on a real library of 34 albums: every gain identical to rsgain's. Peaks differ on about a quarter of the files. In every case examined, Scoria's peak is the file's loudest sample and rsgain's is not. On 24-bit material rsgain reads slightly off, by about one 16-bit step, consistent with it reducing to 16 bits first. On one 16-bit track rsgain reported a peak of exactly 1.0 where no sample exceeds 0.9886. Scoria reports the true sample peak.
+- **Silence is left at 0 dB.** That is what rsgain writes for a silent track. For a wholly silent album rsgain writes `inf dB`, which no player reads sensibly, so Scoria writes 0 dB there as well. Nothing is invented either way.
+- **Whole albums.** An album is analysed if any track on it lacks track or album gain, and then all of it is, because album gain depends on every track. rsgain's skip-existing mode works file by file and can compute album gain over half an album.
+- **Album means album identity (§4.2), not folder.** For most libraries these are the same. A set split into one folder per disc is levelled as the one album it is, where `rsgain easy` would treat each disc separately.
+- **Albums it cannot do whole are left alone and counted.** That means albums with missing files (§7.4), or with a file in a format that has no writer yet. FLAC and Ogg Vorbis are written today. Each other format needs a writer that edits its own tag structure; lofty's generic tag can lose format-specific data from a carefully Picard-tagged file on the way back out, so a generic writer is not an option.
+- **One module writes to the library.** `library/gain/write.rs` replaces the four `REPLAYGAIN_*` keys and nothing else. It parses strictly, so a file it cannot read completely is refused rather than written back incomplete. `check-boundaries.sh` fails the build if a tag-writing call appears anywhere else.
+- **It does not disturb playback.** It runs on its own threads with one core left free. The file playing, and the one preloaded after it, are not rewritten while they are open: rewriting a file mid-decode can shift its audio under the decoder. Those writes are made once playback moves on. Scans are held while the analysis writes, then run once at the end, which is also how the new tags reach the index.
+- **Stop is prompt and leaves nothing half-done.** An album is written only after every track on it has been measured. Stop is checked between tracks, so an album abandoned partway has had nothing written to it.
 
 **Requested, not yet designed: an on/off toggle, and something for untagged tracks.**
 
 The toggle is a fair ask and is a different question from the one §6.7 settles. What is "derived, not configured" here is *which* gain applies -- album or track -- and that stays derived, because the answer follows from how playback is ordered and there is nothing for a user to decide. Whether to apply gain at all is a preference: some people want every record at the same loudness, others want the mastering left alone.
 
-Levelling tracks the tags say nothing about is the harder half and needs a decision this document does not yet make. Computing gain by analysing audio is explicitly out (§6.7); that is `rsgain`'s job. A real-time normaliser is a different thing again -- it would work on untagged material, but it changes dynamics rather than just offsetting level, and doing it well is a project in itself. Neither belongs in 1.0.
+Levelling tracks the tags say nothing about is now answered by computing the tags (above), so a real-time normaliser is not needed for that. It would be a different thing anyway: it changes dynamics rather than just offsetting level, and doing it well is a project in itself.
 
 ### 6.8 Play counts
 
@@ -655,7 +668,9 @@ That leaves the ones with no natural place, which is what this drawer is for:
 - **Play behaviour** (§6.3). §6.3 calls it "the one user-facing option" in the playback model, and it currently has no interface at all.
 - **Theme** (§11). 1.0 ships a curated handful; picking between them is a list.
 
-It also shows two things that are not settings but have no other home: where the settings file, database and artwork cache live, and what fraction of the library carries ReplayGain tags. The second matters because §6.7 is only as good as the tagging, and a partly tagged library sounds uneven for a reason nothing else in the application would ever explain.
+It also shows two things that are not settings but have no other home: where the settings file, database and artwork cache live, and how much of the library is levelled. The second matters because §6.7 is only as good as the tagging, and a partly tagged library sounds uneven for a reason nothing else in the application would ever explain.
+
+That second one is a **Loudness** row: "5,120 of 6,850 tracks levelled", with **Analyse…** when there are gaps an analysis can fill. It arms in place like the Missing row below. The question states the file count, and the confirm button is accent-filled rather than in the danger colour, because it adds tags and removes nothing. While it runs, the row reads "Analysing 41 of 312 albums · <album>" with **Stop**, and the header carries "levelling 41/312" for when the drawer is closed. During a scan, while the root is unreachable, or when every album with a gap is one it has to leave alone, the row says so in words and offers nothing. Files the last analysis could not write are listed beneath it, up to five, until the next run.
 
 While any track is missing, the library section also has a **Missing** row with the count and a **Forget…** button (§7.4). It is an action, not a setting, and it is here because library upkeep already is: the Rescan button sits on the row above it. When nothing is missing the row is not drawn at all. Pressing the button arms the row in place, without a dialog: it changes to "Forget N tracks? Their play counts go too." with **Forget** and **Cancel**, at the same height and in the same position, so nothing moves under the pointer between the two presses. Escape, Cancel, leaving the drawer, a scan starting, or the library changing all disarm it. While a scan is running, or while the library root is not reachable, the row says so in words and has no button. Greying out a button would show that it is unavailable without saying why.
 
@@ -773,11 +788,11 @@ The MusicBrainz identifiers in §4.2 are read from tags. Scoria consumes what Mu
 
 ### 1.0
 
-Single-root library with watching and rescan. Picard-tagged FLAC as first-class, broad format support before release. Three layouts via `BrowserPlacement`. Filter panes, dense track table with column configuration and sort presets. Snapshot playback with the two-mode setting, shuffle and repeat (§6.6). ReplayGain from tags (§6.7). Scan-time artwork extraction and thumbnail cache (§5.3). Gapless for FLAC/Vorbis/Opus. Queue overlay, artwork overlay, properties overlay (read-only), settings overlay (§9.4). Transport bar. Arrow-key navigation with a data-driven keymap. Curated dark themes. MPRIS. FTS5 search.
+Single-root library with watching and rescan. Picard-tagged FLAC as first-class, broad format support before release. Three layouts via `BrowserPlacement`. Filter panes, dense track table with column configuration and sort presets. Snapshot playback with the two-mode setting, shuffle and repeat (§6.6). ReplayGain from tags, and computed into them on request for FLAC and Ogg Vorbis (§6.7). Scan-time artwork extraction and thumbnail cache (§5.3). Gapless for FLAC/Vorbis/Opus. Queue overlay, artwork overlay, properties overlay (read-only), settings overlay (§9.4). Transport bar. Arrow-key navigation with a data-driven keymap. Curated dark themes. MPRIS. FTS5 search.
 
 ### Post-1.0
 
-Saved playlists. Vim keymap. Tag editing in the properties dialog. Playback Mode. MP3 gapless (LAME/Info delay and padding). User-supplied themes. Custom sort chains beyond presets. A ReplayGain on/off toggle, and some answer for tracks the tags say nothing about (§6.7). Resume-on-restart -- §6.2 cites it as a *reason* the snapshot is materialised, and that argument holds whether or not the feature ships. Computing ReplayGain by analysing audio.
+Saved playlists. Vim keymap. Tag editing in the properties dialog. Playback Mode. MP3 gapless (LAME/Info delay and padding). User-supplied themes. Custom sort chains beyond presets. A ReplayGain on/off toggle (§6.7). Loudness tag writers for MP3, M4A and Opus (§6.7). Resume-on-restart -- §6.2 cites it as a *reason* the snapshot is materialised, and that argument holds whether or not the feature ships.
 
 ### Never
 
