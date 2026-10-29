@@ -19,6 +19,10 @@ pub enum Cmd {
         root: Option<PathBuf>,
     },
     Watch,
+    /// Remove tracks whose files are gone (§7.4). Asks first unless `yes`.
+    ForgetMissing {
+        yes: bool,
+    },
     Tracks {
         limit: usize,
     },
@@ -80,6 +84,9 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         "info" => Cmd::Info,
         "config" => Cmd::Config,
         "watch" => Cmd::Watch,
+        "forget-missing" => Cmd::ForgetMissing {
+            yes: tail.iter().any(|a| matches!(*a, "--yes" | "-y")),
+        },
         "scan" => Cmd::Scan {
             root: tail.first().map(PathBuf::from),
         },
@@ -129,6 +136,8 @@ USAGE
 LIBRARY
     scan [PATH]        Index a library. With PATH, makes it the library root.
     watch              Watch the root and rescan when it changes.
+    forget-missing     Remove tracks whose files are gone, and their play counts.
+        --yes          Do not ask first.
     info               Library and playback status.
     config             Settings, and where they live.
 
@@ -237,6 +246,20 @@ mod tests {
     #[test]
     fn scan_takes_an_optional_path() {
         assert_eq!(parse_args(&["scan"]).command, Cmd::Scan { root: None });
+    }
+
+    #[test]
+    fn forgetting_asks_unless_told_not_to() {
+        assert_eq!(
+            parse_args(&["forget-missing"]).command,
+            Cmd::ForgetMissing { yes: false }
+        );
+        for flag in ["--yes", "-y"] {
+            assert_eq!(
+                parse_args(&["forget-missing", flag]).command,
+                Cmd::ForgetMissing { yes: true }
+            );
+        }
         assert_eq!(
             parse_args(&["scan", "/music"]).command,
             Cmd::Scan {

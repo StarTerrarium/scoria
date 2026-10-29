@@ -29,7 +29,7 @@ use out::Out;
 use scoria_core::config::Paths;
 use scoria_core::query::Selection;
 use scoria_core::session::Session;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 
 fn main() -> std::process::ExitCode {
     match run() {
@@ -82,6 +82,7 @@ fn run() -> Result<()> {
         Cmd::Config => config(&session, &mut out),
         Cmd::Scan { root } => scan(&mut session, &mut out, root),
         Cmd::Watch => watch(&mut session, &mut out),
+        Cmd::ForgetMissing { yes } => forget_missing(&mut session, &mut out, yes),
         Cmd::Tracks { limit } => tracks(&session, &mut out, limit),
         Cmd::Artists => artists(&session, &mut out),
         Cmd::Albums { artist } => albums(&session, &mut out, artist),
@@ -111,7 +112,7 @@ fn info(session: &Session, out: &mut Out) -> Result<()> {
     if unavailable > 0 {
         writeln!(
             out,
-            "missing   {unavailable} (shown struck through, never dropped)"
+            "missing   {unavailable} (struck through; `scoria forget-missing` removes them)"
         )?;
     }
 
@@ -154,6 +155,82 @@ fn root_display(session: &Session) -> String {
 }
 
 // ------------------------------------------------------------------ library --
+
+/// §7.4's "Forgetting", from the command line.
+///
+/// Asks before acting, because play counts go with the rows. Where there is no
+/// terminal to ask on it refuses rather than guessing, and `--yes` is how a
+/// script says it meant it.
+fn forget_missing(session: &mut Session, out: &mut Out, yes: bool) -> Result<()> {
+    if !session.library_root_reachable() {
+        anyhow::bail!(
+            "the library folder {} isn't reachable; not forgetting anything",
+            root_display(session)
+        );
+    }
+
+    let missing = session
+        .index()
+        .tracks()
+        .iter()
+        .filter(|t| !t.available)
+        .count();
+    if missing == 0 {
+        writeln!(out, "No missing tracks.")?;
+        return Ok(());
+    }
+
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "{} missing; not forgetting without asking. Pass --yes.",
+                count(missing, "track is", "tracks are")
+            );
+        }
+        writeln!(
+            out,
+            "{} missing from {}.",
+            count(missing, "track is", "tracks are"),
+            root_display(session)
+        )?;
+        writeln!(
+            out,
+            "Their play counts go with them. A rescan finds any whose files come back."
+        )?;
+        write!(out, "Forget them? [y/N] ")?;
+        out.flush()?;
+
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+            writeln!(out, "Nothing forgotten.")?;
+            return Ok(());
+        }
+    }
+
+    let forgotten = session
+        .forget_unavailable()
+        .context("could not forget missing tracks")?;
+    match forgotten.albums {
+        0 => writeln!(
+            out,
+            "Forgot {}.",
+            count(forgotten.tracks, "missing track", "missing tracks")
+        )?,
+        albums => writeln!(
+            out,
+            "Forgot {} and {}.",
+            count(forgotten.tracks, "missing track", "missing tracks"),
+            count(albums, "empty album", "empty albums")
+        )?,
+    }
+    Ok(())
+}
+
+/// "1 track", "2 tracks".
+fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
 
 fn scan(session: &mut Session, out: &mut Out, root: Option<std::path::PathBuf>) -> Result<()> {
     if let Some(root) = root {
