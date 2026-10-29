@@ -520,6 +520,16 @@ The first version appended "(missing)" to the title instead. That reads clearly 
 
 The words come from the core rather than the frontend: the resolver reports *why* it could not resolve a track, so a vanished file is distinguishable from a stale id. They are not the same problem and they cannot be acted on in the same way -- "no such track: 2" is not something anyone can do anything about, and it was not even true, since the track was still in the library.
 
+**Forgetting.** A scan marks and never deletes. Forgetting is a separate action that a person takes, and it removes every missing track at once, plus the albums that leaves empty.
+
+Both halves are needed because two situations look identical on disk. A drive that was unplugged must not cost the library anything. A library that was deliberately moved away must be clearable, or the explorer fills with thousands of struck-through rows that nothing can remove. The first version had no forgetting at all, and the second case happened to the first person to replace their library. Only the person knows which situation they are in, so the person decides.
+
+- **It is confirmed, and the confirmation states the count and the cost.** Play counts (§6.8) live on the track rows and go with them. A file that comes back is found again by the next scan, but it starts counting from zero.
+- **It refuses while the library root is not on disk.** That is the unplugged-drive case, where every track reads as missing, and it is the one time forgetting is certainly a mistake. The refusal is in the core (`CoreError::LibraryUnreachable`) as well as the frontends, so a frontend that forgets to check cannot empty a library.
+- **It is all-at-once.** Forgetting just the selected tracks would be a finer tool for a rarer case. It would also add a second item to every menu it appeared in, for no gain in the case that actually happens.
+- **A snapshot is not rebuilt.** A forgotten id still in the play order skips exactly as it did while its file was merely missing (§6.1, §6.4).
+- **It is offered where the problem is seen.** Right-clicking a struck-through row offers it (§9.6), and the settings drawer has a row for it while anything is missing (§9.4). Both lead to the same confirmation.
+
 ---
 
 ## 8. Transport bar

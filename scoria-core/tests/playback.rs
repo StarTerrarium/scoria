@@ -31,6 +31,8 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Default)]
 struct TestResolver {
     missing: Mutex<HashSet<TrackId>>,
+    /// Ids the index no longer has at all: tracks someone forgot (§7.4).
+    forgotten: Mutex<HashSet<TrackId>>,
     gains: Mutex<Vec<(TrackId, ReplayGain)>>,
 }
 
@@ -39,6 +41,15 @@ impl TestResolver {
         let resolver = Self::default();
         *resolver
             .missing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = ids.iter().map(|i| TrackId(*i)).collect();
+        Arc::new(resolver)
+    }
+
+    fn with_forgotten(ids: &[u64]) -> Arc<Self> {
+        let resolver = Self::default();
+        *resolver
+            .forgotten
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = ids.iter().map(|i| TrackId(*i)).collect();
         Arc::new(resolver)
@@ -66,6 +77,14 @@ impl TrackResolver for TestResolver {
             return Err(scoria_core::error::CoreError::FileMissing {
                 title: format!("track {id:?}"),
             });
+        }
+        if self
+            .forgotten
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&id)
+        {
+            return Err(scoria_core::error::CoreError::NoSuchTrack(id.get()));
         }
         let replay_gain = self
             .gains
@@ -307,6 +326,19 @@ fn tracks_that_no_longer_resolve_are_skipped() {
 
     rig.finish_and_settle();
     rig.until_played(&[1, 4]);
+}
+
+#[test]
+fn a_forgotten_track_still_in_the_snapshot_is_skipped_too() {
+    // Forgetting deletes the row while a snapshot may still hold its id. The
+    // snapshot is never rebuilt (§6.1), so the id has to skip exactly as it
+    // did a moment earlier, when its file was merely missing.
+    let rig = Rig::new(TestResolver::with_forgotten(&[2]));
+    rig.play(&[1, 2, 3]);
+    rig.until_played(&[1]);
+
+    rig.finish_and_settle();
+    rig.until_played(&[1, 3]);
 }
 
 #[test]

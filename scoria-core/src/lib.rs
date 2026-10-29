@@ -39,4 +39,4 @@ pub use playback::{
 };
 pub use query::sort::{Direction, Group, SortChain, SortField, SortKey, SortPreset};
 pub use query::{AlbumPane, FilterPane, LibraryIndex, QueryEngine, QueryOutcome, Selection};
-pub use session::Session;
+pub use session::{Forgotten, Session};

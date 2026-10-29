@@ -466,6 +466,33 @@ impl TrackRepository for SqliteDatabase {
             .map_err(db_err("cannot commit deletion"))
     }
 
+    fn forget_tracks(&mut self, ids: &[TrackId]) -> Result<usize, CoreError> {
+        let transaction = self
+            .conn
+            .transaction()
+            .map_err(db_err("cannot begin transaction"))?;
+        {
+            let mut statement = transaction
+                .prepare("DELETE FROM tracks WHERE id = ?1")
+                .map_err(db_err("cannot prepare delete"))?;
+            for id in ids {
+                statement
+                    .execute(params![id.get().cast_signed()])
+                    .map_err(db_err("cannot delete track"))?;
+            }
+        }
+        let albums = transaction
+            .execute(
+                "DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks)",
+                [],
+            )
+            .map_err(db_err("cannot remove empty albums"))?;
+        transaction
+            .commit()
+            .map_err(db_err("cannot commit deletion"))?;
+        Ok(albums)
+    }
+
     fn unavailable_track_ids(&self) -> Result<Vec<TrackId>, CoreError> {
         let mut statement = self
             .conn

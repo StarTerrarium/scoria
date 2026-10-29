@@ -135,14 +135,25 @@ pub trait TrackRepository {
     /// Removes tracks outright.
     ///
     /// Not what happens when a file goes missing -- §7.4 marks those and keeps
-    /// the row. In practice a track row is only ever removed by the cascade
-    /// from [`AlbumRepository::remove_empty_albums`]; this is here so the
-    /// repository can express deletion at all, and so the schema's cascade and
-    /// full-text triggers can be exercised.
+    /// the row. A track row is removed by the cascade from
+    /// [`AlbumRepository::remove_empty_albums`], or by [`Self::forget_tracks`]
+    /// when someone asks; this is here so the schema's cascade and full-text
+    /// triggers can be exercised on their own.
     ///
     /// # Errors
     /// [`CoreError::Database`] on failure.
     fn delete_tracks(&mut self, ids: &[TrackId]) -> Result<(), CoreError>;
+
+    /// Removes tracks the user has asked to forget, and any album they leave
+    /// empty, returning how many albums went.
+    ///
+    /// One transaction, because this is the only deletion a person asks for
+    /// (§7.4's "Forgetting"). A failure halfway would leave albums with no
+    /// tracks in the pane, and the error would claim nothing happened.
+    ///
+    /// # Errors
+    /// [`CoreError::Database`] on failure, in which case nothing was removed.
+    fn forget_tracks(&mut self, ids: &[TrackId]) -> Result<usize, CoreError>;
 
     /// The tracks currently marked missing (§7.4).
     ///

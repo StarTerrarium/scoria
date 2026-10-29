@@ -31,11 +31,10 @@ pub enum LibraryDelta {
     /// practice. The scanner reads every file's tags on every pass, so this
     /// is the delta that carries an edit made in Picard through to the table.
     TracksChanged(Vec<TrackId>),
-    /// Nothing emits this yet, and a scan never will: §7.4 marks a file that
-    /// has gone rather than deleting its row, which is what
-    /// [`Self::AvailabilityChanged`] reports. Kept because the index applies
-    /// it correctly and a library rebuilt from scratch is the case that would
-    /// want it -- do not reach for it to mean "a file vanished".
+    /// Tracks someone asked to forget (§7.4, "Forgetting"). A scan never
+    /// emits this: it marks a file that has gone rather than deleting its row,
+    /// which is what [`Self::AvailabilityChanged`] reports -- do not reach for
+    /// this to mean "a file vanished".
     TracksRemoved(Vec<TrackId>),
     /// Files appeared or vanished. Vanished tracks are not deleted -- they are
     /// shown struck through and skipped on advance (§7.4).

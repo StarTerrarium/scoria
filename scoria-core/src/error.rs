@@ -78,6 +78,12 @@ pub enum CoreError {
     /// resolve paths against. The first-run picker exists to fix this (§5.1).
     #[error("no library root configured")]
     NoLibraryRoot,
+
+    /// The library root is configured but not on disk: an unplugged drive or
+    /// an unmounted share, usually. Every track reads as missing then, so
+    /// anything that would act on "missing" refuses instead (§7.4).
+    #[error("the library folder {root} isn't reachable")]
+    LibraryUnreachable { root: String },
 }
 
 #[cfg(test)]
@@ -123,6 +129,9 @@ mod tests {
             CoreError::Desktop("c".to_owned()),
             CoreError::Scan("d".to_owned()),
             CoreError::NoLibraryRoot,
+            CoreError::LibraryUnreachable {
+                root: "/home/someone/Music".to_owned(),
+            },
             CoreError::FileMissing {
                 title: "花冷え。".to_owned(),
             },

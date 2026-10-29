@@ -15,7 +15,7 @@ use crate::config::{LibraryConfig, Paths, PlayBehaviour};
 use crate::db::repository::TrackRepository;
 use crate::db::sqlite::SqliteDatabase;
 use crate::error::CoreError;
-use crate::event::{Event, PlaybackState};
+use crate::event::{Event, LibraryDelta, PlaybackState};
 use crate::id::{AlbumId, TrackId};
 use crate::library::artwork::ArtworkKey;
 use crate::library::scanner::{ScanOutcome, ScanProgress, Scanner};
@@ -67,6 +67,14 @@ pub struct Session {
     /// Whether the track now playing has already been counted (§6.8). Cleared
     /// by every `TrackChanged`, so repeat-one counts each time round.
     counted_this_play: bool,
+}
+
+/// What [`Session::forget_unavailable`] removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Forgotten {
+    pub tracks: usize,
+    /// Albums left with no tracks, removed with them.
+    pub albums: usize,
 }
 
 /// How long the watch thread waits before checking whether it should stop.
@@ -736,6 +744,66 @@ impl Session {
             self.start_watching()?;
         }
         Ok(())
+    }
+
+    /// Whether the library root exists on disk right now.
+    ///
+    /// False for no root at all, and for one on a drive that is not mounted --
+    /// which is the case that matters: every track under it reads as missing,
+    /// and forgetting them would empty a library that is only unplugged.
+    #[must_use]
+    pub fn library_root_reachable(&self) -> bool {
+        self.config.root().is_ok_and(Path::is_dir)
+    }
+
+    /// Deletes every track whose file has gone missing, and the albums that
+    /// leaves empty (§7.4, "Forgetting").
+    ///
+    /// Never called by a scan. A scan marks; only a person forgets, because a
+    /// library that was deliberately moved and a drive that was unplugged look
+    /// the same on disk, and only one of them should cost the rows. Play
+    /// counts go with the rows, which is why frontends confirm first.
+    ///
+    /// Artwork for the emptied albums is left for the next scan to prune
+    /// (`ArtworkCache::retain`): the keys come from album identity, which the
+    /// scanner resolves and nothing here should resolve a second time.
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::LibraryUnreachable`] if the root is not on disk, so a
+    /// frontend that forgot to check cannot empty an unplugged library;
+    /// [`CoreError::NoLibraryRoot`] if none is set; or
+    /// [`CoreError::Database`] if storage fails, in which case nothing was
+    /// removed.
+    pub fn forget_unavailable(&mut self) -> Result<Forgotten, CoreError> {
+        let root = self.library_root()?;
+        if !root.is_dir() {
+            return Err(CoreError::LibraryUnreachable {
+                root: root.display().to_string(),
+            });
+        }
+
+        let ids = self.db.unavailable_track_ids()?;
+        if ids.is_empty() {
+            return Ok(Forgotten::default());
+        }
+        let albums = self.db.forget_tracks(&ids)?;
+        let forgotten = Forgotten {
+            tracks: ids.len(),
+            albums,
+        };
+
+        self.index = LibraryIndex::load(&self.db)?;
+        self.emit(Event::LibraryChanged(LibraryDelta::TracksRemoved(ids)));
+
+        // As after a scan: the audio thread resolves against its own copy. A
+        // snapshot still holding a forgotten id skips it, as it already did
+        // while the file was merely missing.
+        if self.playback.is_some() {
+            let resolver = Arc::new(IndexResolver::new(self.index.clone(), &root));
+            self.send_to_engine(EngineCommand::SetResolver(resolver))?;
+        }
+        Ok(forgotten)
     }
 
     /// Records the play behaviour setting (§6.3) and saves it.
