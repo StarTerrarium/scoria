@@ -83,6 +83,9 @@ fn run() -> Result<()> {
         Cmd::Scan { root } => scan(&mut session, &mut out, root),
         Cmd::Watch => watch(&mut session, &mut out),
         Cmd::ForgetMissing { yes } => forget_missing(&mut session, &mut out, yes),
+        Cmd::AnalyseGain { all, dry_run, yes } => {
+            analyse_gain(&mut session, &mut out, all, dry_run, yes)
+        }
         Cmd::Tracks { limit } => tracks(&session, &mut out, limit),
         Cmd::Artists => artists(&session, &mut out),
         Cmd::Albums { artist } => albums(&session, &mut out, artist),
@@ -127,10 +130,7 @@ fn info(session: &Session, out: &mut Out) -> Result<()> {
     writeln!(out, "volume    {:.0}%", session.config().volume() * 100.0)?;
     writeln!(out, "replaygain {tagged}/{} tracks tagged", outcome.total)?;
     if tagged < outcome.total && outcome.total > 0 {
-        writeln!(
-            out,
-            "          Scoria reads gain but never computes it; `rsgain easy <root>` fills the gaps."
-        )?;
+        writeln!(out, "          `scoria analyse-gain` fills the gaps.")?;
     }
     Ok(())
 }
@@ -223,6 +223,160 @@ fn forget_missing(session: &mut Session, out: &mut Out, yes: bool) -> Result<()>
             count(forgotten.tracks, "missing track", "missing tracks"),
             count(albums, "empty album", "empty albums")
         )?,
+    }
+    Ok(())
+}
+
+/// §6.7's loudness analysis, from the command line.
+///
+/// Asks before writing, because this is Scoria changing the files. `--dry-run`
+/// measures and prints without writing, which is also how its numbers are
+/// checked against rsgain's.
+fn analyse_gain(
+    session: &mut Session,
+    out: &mut Out,
+    all: bool,
+    dry_run: bool,
+    yes: bool,
+) -> Result<()> {
+    use scoria_core::event::Event;
+    use scoria_core::library::gain::job;
+
+    if !session.library_root_reachable() {
+        anyhow::bail!(
+            "the library folder {} isn't reachable; not analysing anything",
+            root_display(session)
+        );
+    }
+    let plan = session.gain_plan(all)?;
+    let skipped = plan.skipped;
+    let skip_notes = |out: &mut Out| -> Result<()> {
+        if skipped.missing_files > 0 {
+            writeln!(
+                out,
+                "{} skipped: some of their files are missing.",
+                count(skipped.missing_files, "album", "albums")
+            )?;
+        }
+        if skipped.unsupported > 0 {
+            writeln!(
+                out,
+                "{} skipped: only FLAC and Ogg Vorbis can be tagged so far.",
+                count(skipped.unsupported, "album", "albums")
+            )?;
+        }
+        Ok(())
+    };
+
+    if plan.albums.is_empty() {
+        writeln!(
+            out,
+            "Nothing to analyse: every album that can be is levelled."
+        )?;
+        return skip_notes(out);
+    }
+    let albums = count(plan.albums.len(), "album", "albums");
+    let files = count(plan.files(), "file", "files");
+    if all {
+        writeln!(out, "{albums} ({files}) to analyse.")?;
+    } else {
+        writeln!(out, "{albums} ({files}) lack loudness tags.")?;
+    }
+    skip_notes(out)?;
+
+    if dry_run {
+        let never = std::sync::atomic::AtomicBool::new(false);
+        for album in &plan.albums {
+            writeln!(
+                out,
+                "
+{} -- {}",
+                album.album_artist, album.title
+            )?;
+            match job::analyse(album, &never) {
+                Ok(Some(analysed)) => {
+                    for (path, tags) in &analysed.writes {
+                        let name = path.file_name().map_or_else(
+                            || path.display().to_string(),
+                            |n| n.to_string_lossy().into_owned(),
+                        );
+                        writeln!(
+                            out,
+                            "  {:>10}  {}  {name}",
+                            tags.track.gain_tag(),
+                            tags.track.peak_tag()
+                        )?;
+                    }
+                    if let Some((_, tags)) = analysed.writes.first() {
+                        writeln!(
+                            out,
+                            "  {:>10}  {}  (album)",
+                            tags.album.gain_tag(),
+                            tags.album.peak_tag()
+                        )?;
+                    }
+                }
+                Ok(None) => {}
+                Err((path, e)) => writeln!(out, "  cannot measure {}: {e}", path.display())?,
+            }
+            out.flush()?;
+        }
+        return Ok(());
+    }
+
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!("not writing tags into {files} without asking. Pass --yes.");
+        }
+        write!(out, "Write ReplayGain tags into {files}? [y/N] ")?;
+        out.flush()?;
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+            writeln!(out, "Nothing written.")?;
+            return Ok(());
+        }
+    }
+
+    session.start_gain_analysis(all)?;
+    let report = loop {
+        match session.next_event(std::time::Duration::from_millis(200)) {
+            Some(Event::GainProgress { done, total, album }) => {
+                let width = total.to_string().len();
+                writeln!(out, "  [{done:>width$}/{total}] {album}")?;
+                out.flush()?;
+            }
+            Some(Event::GainFinished(report)) => break report,
+            Some(Event::Error(e)) => writeln!(out, "  {e}")?,
+            _ => {}
+        }
+    };
+
+    // Nothing is watching from here, so the new tags reach the index only if
+    // this asks.
+    session
+        .rescan(&mut |_| {})
+        .context("cannot read the new tags")?;
+
+    let verb = if report.stopped {
+        "Stopped after"
+    } else {
+        "Levelled"
+    };
+    writeln!(
+        out,
+        "{verb} {}.",
+        count(report.albums_done, "album", "albums")
+    )?;
+    if !report.failed.is_empty() {
+        writeln!(
+            out,
+            "{} could not be measured or written:",
+            count(report.failed.len(), "file", "files")
+        )?;
+        for (path, reason) in &report.failed {
+            writeln!(out, "  {path}: {reason}")?;
+        }
     }
     Ok(())
 }

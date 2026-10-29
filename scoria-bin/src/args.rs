@@ -23,6 +23,14 @@ pub enum Cmd {
     ForgetMissing {
         yes: bool,
     },
+    /// Measure loudness and write ReplayGain tags (§6.7).
+    AnalyseGain {
+        /// Re-analyse albums that are already tagged.
+        all: bool,
+        /// Measure and print; write nothing.
+        dry_run: bool,
+        yes: bool,
+    },
     Tracks {
         limit: usize,
     },
@@ -87,6 +95,11 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         "forget-missing" => Cmd::ForgetMissing {
             yes: tail.iter().any(|a| matches!(*a, "--yes" | "-y")),
         },
+        "analyse-gain" | "analyze-gain" => Cmd::AnalyseGain {
+            all: tail.contains(&"--all"),
+            dry_run: tail.contains(&"--dry-run"),
+            yes: tail.iter().any(|a| matches!(*a, "--yes" | "-y")),
+        },
         "scan" => Cmd::Scan {
             root: tail.first().map(PathBuf::from),
         },
@@ -137,6 +150,11 @@ LIBRARY
     scan [PATH]        Index a library. With PATH, makes it the library root.
     watch              Watch the root and rescan when it changes.
     forget-missing     Remove tracks whose files are gone, and their play counts.
+        --yes          Do not ask first.
+    analyse-gain       Measure loudness and write ReplayGain tags, as `rsgain easy`
+                       would, into albums that lack them.
+        --dry-run      Measure and print; write nothing.
+        --all          Re-analyse albums that are already tagged.
         --yes          Do not ask first.
     info               Library and playback status.
     config             Settings, and where they live.
@@ -246,6 +264,31 @@ mod tests {
     #[test]
     fn scan_takes_an_optional_path() {
         assert_eq!(parse_args(&["scan"]).command, Cmd::Scan { root: None });
+    }
+
+    #[test]
+    fn analysing_takes_its_flags_in_any_order() {
+        assert_eq!(
+            parse_args(&["analyse-gain"]).command,
+            Cmd::AnalyseGain {
+                all: false,
+                dry_run: false,
+                yes: false
+            }
+        );
+        assert_eq!(
+            parse_args(&["analyse-gain", "-y", "--dry-run", "--all"]).command,
+            Cmd::AnalyseGain {
+                all: true,
+                dry_run: true,
+                yes: true
+            }
+        );
+        // The other spelling, because someone will type it.
+        assert_eq!(
+            parse_args(&["analyze-gain"]).command,
+            parse_args(&["analyse-gain"]).command
+        );
     }
 
     #[test]
